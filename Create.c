@@ -182,6 +182,12 @@ int Create(struct supertype *st, char *mddev,
 		pr_err("This metadata type does not support spare disks at create time\n");
 		return 1;
 	}
+	if (st && !st->ss->external && c->spare_required) {
+		pr_err("This metadata type does not support required spare disks\n");
+		return 1;
+	} else if (c->spare_required) {
+		st->external_flags |= DS_SPARE_REQUIRED_F;
+	}
 	if (subdevs > s->raiddisks+s->sparedisks+s->journaldisks) {
 		pr_err("You have listed more devices (%d) than are in the array(%d)!\n", subdevs, s->raiddisks+s->sparedisks);
 		return 1;

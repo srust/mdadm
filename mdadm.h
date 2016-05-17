@@ -305,6 +305,9 @@ struct mdinfo {
 	#define	DS_UNBLOCK	2048
 	int prev_state, curr_state, next_state;
 
+	#define DS_SPARE_REQUIRED_F (1 << 0)
+	uint8_t flags;
+
 	/* info read from sysfs */
 	char		sysfs_array_state[20];
 };
@@ -405,6 +408,7 @@ enum special_options {
 	ClusterName,
 	ClusterConfirm,
 	WriteJournal,
+	SpareRequired,
 };
 
 enum prefix_standard {
@@ -487,6 +491,7 @@ struct context {
 	char	*action;
 	int	nodes;
 	char	*homecluster;
+	int spare_required;
 };
 
 struct shape {
@@ -1082,6 +1087,7 @@ struct supertype {
 			      */
 	struct metadata_update *updates;
 	struct metadata_update **update_tail;
+	uint8_t external_flags; /* used by external ddf array only */
 
 	/* extra stuff used by mdmon */
 	struct active_array *arrays;
@@ -1091,7 +1097,7 @@ struct supertype {
 			 */
 	int devcnt;
 	int retry_soon;
-    int blocked;
+	int blocked;
 	int nodes;
 	char *cluster_name;
 

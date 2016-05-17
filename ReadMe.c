@@ -143,6 +143,7 @@ struct option long_options[] = {
     {"nodes",1, 0, Nodes}, /* also for --assemble */
     {"home-cluster",1, 0, ClusterName},
     {"write-journal",1, 0, WriteJournal},
+    {"spare-required",0,0, SpareRequired},
 
     /* For assemble */
     {"uuid",      1, 0, 'u'},

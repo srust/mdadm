@@ -1980,6 +1980,7 @@ static void getinfo_super_ddf(struct supertype *st, struct mdinfo *info, char *m
 	}
 	memset(info, 0, sizeof(*info));
 
+	info->flags = ddf->anchor.foreignflag;
 	info->array.raid_disks    = be16_to_cpu(ddf->phys->used_pdes);
 	info->array.level	  = LEVEL_CONTAINER;
 	info->array.layout	  = 0;
@@ -2174,32 +2175,32 @@ static struct mdinfo *getinfo_super_disks_ddf(struct supertype *st)
 			/* Not in use */
 			continue;
 
-	    struct dl *dl;
+		struct dl *dl;
 		for (dl = sb->dlist; dl ; dl = dl->next) {
 			if (be32_eq(dl->disk.refnum, pd->refnum)) {
-		        struct mdinfo *tmp = xcalloc(1, sizeof(*tmp));
-                if (!mddev)
-                    mddev = tmp;
-		        if (mddev->devs)
-			        tmp->next = mddev->devs;
-		        mddev->devs = tmp;
+				struct mdinfo *tmp = xcalloc(1, sizeof(*tmp));
+				if (!mddev)
+					mddev = tmp;
+				if (mddev->devs)
+					tmp->next = mddev->devs;
+				mddev->devs = tmp;
 
-		        tmp->disk.number = i;
-		        tmp->disk.major = dl->major;
-		        tmp->disk.minor = dl->minor;
-		        tmp->disk.state = 0;
-                if (type & DDF_Active_in_VD)
-                    tmp->disk.state |= (1 << MD_DISK_ACTIVE);
-                if (state & DDF_Failed)
-                    tmp->disk.state |= (1 << MD_DISK_FAULTY);
-                if (state & DDF_Missing)
-                    tmp->disk.state |= (1 << MD_DISK_FAULTY);
-                tmp->disk.raid_disk = -1;
-            }
+				tmp->disk.number = i;
+				tmp->disk.major = dl->major;
+				tmp->disk.minor = dl->minor;
+				tmp->disk.state = 0;
+				if (type & DDF_Active_in_VD)
+					tmp->disk.state |= (1 << MD_DISK_ACTIVE);
+				if (state & DDF_Failed)
+					tmp->disk.state |= (1 << MD_DISK_FAULTY);
+				if (state & DDF_Missing)
+					tmp->disk.state |= (1 << MD_DISK_FAULTY);
+				tmp->disk.raid_disk = -1;
+			}
 		}
-    }
+	}
 
-    return mddev;
+	return mddev;
 }
 
 static int update_super_ddf(struct supertype *st, struct mdinfo *info,
@@ -2401,7 +2402,7 @@ static int init_super_ddf(struct supertype *st,
 	ddf->anchor.seq = cpu_to_be32(1);
 	ddf->anchor.timestamp = cpu_to_be32(time(0) - DECADE);
 	ddf->anchor.openflag = 0xFF;
-	ddf->anchor.foreignflag = 0;
+	ddf->anchor.foreignflag = st->external_flags;
 	ddf->anchor.enforcegroups = 0; /* Is this best?? */
 	ddf->anchor.pad0 = 0xff;
 	memset(ddf->anchor.pad1, 0xff, 12);
@@ -5287,7 +5288,7 @@ struct superswitch super_ddf = {
 	.match_home	= match_home_ddf,
 	.uuid_from_super= uuid_from_super_ddf,
 	.getinfo_super  = getinfo_super_ddf,
-    .getinfo_super_disks = getinfo_super_disks_ddf,
+	.getinfo_super_disks = getinfo_super_disks_ddf,
 	.update_super	= update_super_ddf,
 
 	.avail_size	= avail_size_ddf,

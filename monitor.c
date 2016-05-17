@@ -225,17 +225,21 @@ static void signal_manager(void)
 int
 has_valid_spare(struct active_array *a, struct mdinfo *disk)
 {
-    struct mdinfo *disks, *mdi;
+	struct mdinfo *disks, *mdi;
+	struct mdinfo info;
 
-    disks = a->container->ss->getinfo_super_disks(a->container);
+	a->container->ss->getinfo_super(a->container, &info, NULL);
+	if (!(info.flags & DS_SPARE_REQUIRED_F))
+		return 1;
 
-    for (mdi = disks->devs; mdi; mdi = mdi->next) {
-        /* no disk state is a valid spare */
-        if (mdi->disk.state == 0)
-            return 1;
-    }
+	disks = a->container->ss->getinfo_super_disks(a->container);
+	for (mdi = disks->devs; mdi; mdi = mdi->next) {
+		/* no disk state is a valid spare */
+		if (mdi->disk.state == 0)
+			return 1;
+	}
 
-    return 0;
+	return 0;
 }
 
 /*
@@ -380,10 +384,10 @@ static int read_and_act(struct active_array *a)
 	 */
 	for (mdi = a->info.devs ; mdi ; mdi = mdi->next) {
 		if (mdi->curr_state & DS_FAULTY) {
-            if (!has_valid_spare(a, mdi)) {
-                dprintf("%d faulty: no valid spare\n", mdi->disk.raid_disk);
-                return (ret | ARRAY_BLOCKED);
-            }
+			if (!has_valid_spare(a, mdi)) {
+				dprintf("%d faulty: no valid spare\n", mdi->disk.raid_disk);
+				return (ret | ARRAY_BLOCKED);
+			}
 			a->container->ss->set_disk(a, mdi->disk.raid_disk,
 						   mdi->curr_state);
 			check_degraded = 1;
@@ -649,9 +653,9 @@ static int wait_and_act(struct supertype *container, int nowait)
 			/* just waiting to get O_EXCL access */
 			ts.tv_sec = 0;
 			ts.tv_nsec = 20000000ULL;
-        } else if (container->blocked) {
-            ts.tv_sec = 1;
-            ts.tv_nsec = 0;
+		} else if (container->blocked) {
+			ts.tv_sec = 1;
+			ts.tv_nsec = 0;
 		}
 		sigprocmask(SIG_UNBLOCK, NULL, &set);
 		sigdelset(&set, SIGUSR1);
@@ -713,8 +717,8 @@ static int wait_and_act(struct supertype *container, int nowait)
 				a->container = NULL; /* stop touching this array */
 			if (ret & ARRAY_BUSY)
 				container->retry_soon = 1;
-            if (ret & ARRAY_BLOCKED)
-                container->blocked = 1;
+			if (ret & ARRAY_BLOCKED)
+				container->blocked = 1;
 		}
 	}
 

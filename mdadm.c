@@ -1198,6 +1198,10 @@ int main(int argc, char *argv[])
 
 			s.journaldisks = 1;
 			continue;
+
+		case O(CREATE, SpareRequired):
+			c.spare_required = 1;
+			continue;
 		}
 		/* We have now processed all the valid options. Anything else is
 		 * an error
