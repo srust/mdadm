@@ -2158,6 +2158,50 @@ static void getinfo_super_ddf_bvd(struct supertype *st, struct mdinfo *info, cha
 		}
 }
 
+static struct mdinfo *getinfo_super_disks_ddf(struct supertype *st)
+{
+	struct ddf_super *sb = st->sb;
+	struct mdinfo *mddev = NULL;
+	int cnt = be16_to_cpu(sb->phys->max_pdes);
+	int i;
+
+	for (i = 0; i < cnt; i++) {
+		struct phys_disk_entry *pd = &sb->phys->entries[i];
+		int type = be16_to_cpu(pd->type);
+		int state = be16_to_cpu(pd->state);
+
+		if (be32_to_cpu(pd->refnum) == 0xffffffff)
+			/* Not in use */
+			continue;
+
+	    struct dl *dl;
+		for (dl = sb->dlist; dl ; dl = dl->next) {
+			if (be32_eq(dl->disk.refnum, pd->refnum)) {
+		        struct mdinfo *tmp = xcalloc(1, sizeof(*tmp));
+                if (!mddev)
+                    mddev = tmp;
+		        if (mddev->devs)
+			        tmp->next = mddev->devs;
+		        mddev->devs = tmp;
+
+		        tmp->disk.number = i;
+		        tmp->disk.major = dl->major;
+		        tmp->disk.minor = dl->minor;
+		        tmp->disk.state = 0;
+                if (type & DDF_Active_in_VD)
+                    tmp->disk.state |= (1 << MD_DISK_ACTIVE);
+                if (state & DDF_Failed)
+                    tmp->disk.state |= (1 << MD_DISK_FAULTY);
+                if (state & DDF_Missing)
+                    tmp->disk.state |= (1 << MD_DISK_FAULTY);
+                tmp->disk.raid_disk = -1;
+            }
+		}
+    }
+
+    return mddev;
+}
+
 static int update_super_ddf(struct supertype *st, struct mdinfo *info,
 			    char *update,
 			    char *devname, int verbose,
@@ -5243,6 +5287,7 @@ struct superswitch super_ddf = {
 	.match_home	= match_home_ddf,
 	.uuid_from_super= uuid_from_super_ddf,
 	.getinfo_super  = getinfo_super_ddf,
+    .getinfo_super_disks = getinfo_super_disks_ddf,
 	.update_super	= update_super_ddf,
 
 	.avail_size	= avail_size_ddf,

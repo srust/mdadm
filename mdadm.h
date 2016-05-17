@@ -1091,6 +1091,7 @@ struct supertype {
 			 */
 	int devcnt;
 	int retry_soon;
+    int blocked;
 	int nodes;
 	char *cluster_name;
 
