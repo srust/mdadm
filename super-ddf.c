@@ -4918,13 +4918,34 @@ static int ddf_prepare_update(struct supertype *st,
  * Check degraded state of a RAID10.
  * returns 2 for good, 1 for degraded, 0 for failed, and -1 for error
  */
-static int raid10_degraded(struct mdinfo *info)
+static int raid10_degraded(struct ddf_super *ddf, struct mdinfo *info)
 {
 	int n_prim, n_bvds;
 	int i;
 	struct mdinfo *d;
 	char *found;
 	int ret = -1;
+
+	// special RAID1E / RAID10 with uneven disks processing
+	unsigned int n_bvd;
+	struct vcl *vcl;
+	struct vd_config *vc = find_vdcr(ddf, info->container_member, 0, &n_bvd, &vcl);
+	if (vc && vc->prl == DDF_RAID1E) {
+		int state = get_bvd_state(ddf, vc);
+		switch (state) {
+		case DDF_state_degraded:
+			return 1;
+		case DDF_state_optimal:
+			return 2;
+		case DDF_state_failed:
+			return 0;
+		default:
+			return -1;
+		}
+	}
+
+	if (info->array.raid_disks % 2 != 0)
+		pr_err("BUG: RAID10 with uneven disks degraded check will fail");
 
 	n_prim = info->array.layout & ~0x100;
 	n_bvds = info->array.raid_disks / n_prim;
@@ -5017,7 +5038,7 @@ static struct mdinfo *ddf_activate_spare(struct active_array *a,
 			return NULL; /* failed */
 		break;
 	case 10:
-		if (raid10_degraded(&a->info) < 1)
+		if (raid10_degraded(ddf, &a->info) < 1)
 			return NULL;
 		break;
 	default: /* concat or stripe */
@@ -5143,14 +5164,17 @@ static struct mdinfo *ddf_activate_spare(struct active_array *a,
 	if (!rv)
 		/* No spares found */
 		return rv;
+
 	/* Now 'rv' has a list of devices to return.
 	 * Create a metadata_update record to update the
 	 * phys_refnum and lba_offset values
 	 */
 	vc = find_vdcr(ddf, a->info.container_member, rv->disk.raid_disk,
 		       &n_bvd, &vcl);
-	if (vc == NULL)
+	if (vc == NULL) {
+		free(rv);
 		return NULL;
+	}
 
 	mu = xmalloc(sizeof(*mu));
 	if (posix_memalign(&mu->space, 512, sizeof(struct vcl)) != 0) {
@@ -5185,6 +5209,7 @@ static struct mdinfo *ddf_activate_spare(struct active_array *a,
 			pr_err("BUG: can't find disk %d (%d/%d)\n",
 			       di->disk.raid_disk,
 			       di->disk.major, di->disk.minor);
+			// XXX: memory leak here for 'mu' and 'rv'
 			return NULL;
 		}
 		vc->phys_refnum[i_prim] = ddf->phys->entries[dl->pdnum].refnum;
