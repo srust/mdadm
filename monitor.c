@@ -156,6 +156,8 @@ int read_dev_state(int fd)
 			rv |= DS_SPARE;
 		if (sysfs_attr_match(cp, "blocked"))
 			rv |= DS_BLOCKED;
+        if (sysfs_attr_match(cp, "write_error"))
+            rv |= DS_WRITE_ERROR;
 		cp = strchr(cp, ',');
 		if (cp)
 			cp++;
@@ -416,13 +418,15 @@ static int read_and_act(struct active_array *a, fd_set *fds)
 
 	a->curr_state = read_state(a->info.state_fd);
 	a->curr_action = read_action(a->action_fd);
+
+    /*
+     * In "clear" state, resync_start may wrongly be set to "0"
+     * when the kernel called md_clean but didn't remove the
+     * sysfs attributes yet
+     */
 	if (a->curr_state != clear)
-		/*
-		 * In "clear" state, resync_start may wrongly be set to "0"
-		 * when the kernel called md_clean but didn't remove the
-		 * sysfs attributes yet
-		 */
 		read_resync_start(a->resync_start_fd, &a->info.resync_start);
+
 	sync_completed = read_sync_completed(a->sync_completed_fd);
 	for (mdi = a->info.devs; mdi ; mdi = mdi->next) {
 		mdi->next_state = 0;
@@ -432,6 +436,10 @@ static int read_and_act(struct active_array *a, fd_set *fds)
 					  &mdi->recovery_start);
 			mdi->curr_state = read_dev_state(mdi->state_fd);
 		}
+
+        if (mdi->curr_state & DS_WRITE_ERROR)
+            dprintf("curr_state: WRITE_ERROR: disk %d\n",
+                    mdi->disk.raid_disk);
 		/*
 		 * If array is blocked and metadata handler is able to handle
 		 * BB, check if you can acknowledge them to md driver. If
@@ -547,12 +555,20 @@ static int read_and_act(struct active_array *a, fd_set *fds)
 	 *    made writable.
 	 */
 	for (mdi = a->info.devs ; mdi ; mdi = mdi->next) {
+		if (mdi->curr_state & DS_BLOCKED) {
+            dprintf("curr_state: DS_BLOCKED: disk %d\n",
+                    mdi->disk.raid_disk);
+        }
 		if (mdi->curr_state & DS_FAULTY) {
+            dprintf("curr_state: FAULTY disk: %d\n", mdi->disk.number);
 			a->container->ss->set_disk(a, mdi->disk.raid_disk,
 						   mdi->curr_state);
 			check_degraded = 1;
-			if (mdi->curr_state & DS_BLOCKED)
+			if (mdi->curr_state & DS_BLOCKED) {
+                dprintf("FAULTY disk is DS_BLOCKED: %d\n",
+                        mdi->disk.raid_disk);
 				mdi->next_state |= DS_UNBLOCK;
+            }
 			if (a->curr_state == read_auto) {
 				a->container->ss->set_array_state(a, 0);
 				a->next_state = active;
