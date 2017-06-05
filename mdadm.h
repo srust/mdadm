@@ -1460,9 +1460,10 @@ extern unsigned long long calc_array_size(int level, int raid_disks, int layout,
 extern int flush_metadata_updates(struct supertype *st);
 extern void append_metadata_update(struct supertype *st, void *buf, int len);
 extern int assemble_container_content(struct supertype *st, int mdfd,
-				      struct mdinfo *content,
-				      struct context *c,
-				      char *chosen_name, int *result);
+									  struct mdinfo *content,
+									  struct context *c,
+									  char *chosen_name, int bitmap_fd,
+									  int *result);
 #define	INCR_NO		1
 #define	INCR_UNSAFE	2
 #define	INCR_ALREADY	4

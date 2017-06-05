@@ -1503,7 +1503,8 @@ try_again:
 		/* This is a member of a container.  Try starting the array. */
 		int err;
 		err = assemble_container_content(st, mdfd, content, c,
-						 chosen_name, NULL);
+										 chosen_name,
+										 ident->bitmap_fd, NULL);
 		close(mdfd);
 		return err;
 	}
@@ -1865,8 +1866,8 @@ try_again:
 
 #ifndef MDASSEMBLE
 int assemble_container_content(struct supertype *st, int mdfd,
-			       struct mdinfo *content, struct context *c,
-			       char *chosen_name, int *result)
+							   struct mdinfo *content, struct context *c,
+							   char *chosen_name, int bitmap_fd, int *result)
 {
 	struct mdinfo *dev, *sra, *dev2;
 	int working = 0, preexist = 0;
@@ -1887,6 +1888,13 @@ int assemble_container_content(struct supertype *st, int mdfd,
 			content->text_version[0] = '-';
 		if (sysfs_set_array(content, md_get_version(mdfd)) != 0) {
 			sysfs_free(sra);
+			return 1;
+		}
+	}
+
+	if (bitmap_fd >= 0) {
+		if (ioctl(mdfd, SET_BITMAP_FILE, bitmap_fd) != 0) {
+			pr_err("SET_BITMAP_FILE failed.\n");
 			return 1;
 		}
 	}

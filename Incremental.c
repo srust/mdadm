@@ -1612,7 +1612,7 @@ static int Incremental_container(struct supertype *st, char *devname,
 		}
 
 		assemble_container_content(st, mdfd, ra, c,
-					   chosen_name, &result);
+								   chosen_name, -1, &result);
 		close(mdfd);
 	}
 	if (c->export && result) {
