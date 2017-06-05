@@ -16,3 +16,8 @@
 /mdassemble.static
 /mdmon.O2
 /raid6check
+/*.sw*
+/cscope.out
+/TAGS
+/tags
+/*.rpm

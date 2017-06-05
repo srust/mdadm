@@ -1,13 +1,11 @@
 Summary:     mdadm is used for controlling Linux md devices (aka RAID arrays)
-Name:        mdadm
+Name:        blockbridge-mdadm
 Version:     4.0
-Release:     1
-Source:      http://www.kernel.org/pub/linux/utils/raid/mdadm/mdadm-%{version}.tar.gz
-URL:         http://neil.brown.name/blog/mdadm
+Release:     %{BB_BUILD_NUMBER}
+Source:      blockbridge-mdadm-%{version}.tar.gz
 License:     GPL
 Group:       Utilities/System
 BuildRoot:   %{_tmppath}/%{name}-root
-Obsoletes:   mdctl
 
 %description
 mdadm is a program that can be used to create, manage, and monitor
@@ -23,23 +21,27 @@ Linux MD (Software RAID) devices.
 # people who install RPMs (especially given that the default RPM options
 # will strip the binary) are not going to be running gdb against the
 # program.
-make CXFLAGS="$RPM_OPT_FLAGS" SYSCONFDIR="%{_sysconfdir}"
+make CXFLAGS="$RPM_OPT_FLAGS" BINDIR=%{_sbindir} SYSCONFDIR="%{_sysconfdir}"
 
 %install
 make DESTDIR=$RPM_BUILD_ROOT MANDIR=%{_mandir} BINDIR=%{_sbindir} install
 install -D -m644 mdadm.conf-example $RPM_BUILD_ROOT/%{_sysconfdir}/mdadm.conf
+install -D -m644 systemd/mdmon@.service $RPM_BUILD_ROOT/etc/systemd/system/mdmon@.service
+
+# cleanup unpackages files
+cd $RPM_BUILD_ROOT
+rm -f TODO ChangeLog mdadm.conf-example COPYING
+rm -rf $RPM_BUILD_ROOT/usr/lib/udev/rules.d/
+rm -rf $RPM_BUILD_ROOT/%{_sysconfdir}/mdadm.conf
+rm -rf $RPM_BUILD_ROOT/%{_mandir}/man*
 
 %clean
 rm -rf $RPM_BUILD_ROOT
 
 %files
 %defattr(-,root,root)
-%doc TODO ChangeLog mdadm.conf-example COPYING
 %{_sbindir}/mdadm
 %{_sbindir}/mdmon
-/usr/lib/udev/rules.d/63-md-raid-arrays.rules
-/usr/lib/udev/rules.d/64-md-raid-assembly.rules
-%config(noreplace,missingok)/%{_sysconfdir}/mdadm.conf
-%{_mandir}/man*/md*
+/etc/systemd/system/mdmon@.service
 
 %changelog
