@@ -1,14 +1,11 @@
 #!/bin/sh
 # avoid silly sorting
 export LANG=C
+: ${BUILD_NUMBER="1dev"}
 arg=$1
-target=~/public_html/source/mdadm
-if [ " $arg" = " test" ]
-then
-  target=/tmp/mdadm-test
-  rm -rf $target
-  mkdir -p $target
-fi
+target=/tmp/mdadm.build
+rm -rf $target
+mkdir -p $target
 if [ -d $target ]
 then :
 else echo $target is not a directory
@@ -27,7 +24,7 @@ grep "^.TH MDMON 8 .. v$version" mdmon.8 > /dev/null 2>&1 ||
    exit 1
  }
 rpmv=`echo $version | tr - _`
-grep "^Version: *$rpmv$" mdadm.spec > /dev/null 2>&1 ||
+grep "^Version: *$rpmv$" blockbridge-mdadm.spec > /dev/null 2>&1 ||
  {
    echo mdadm.spec does not mention version $version.
    exit 1
@@ -44,7 +41,7 @@ else { cat inventory ; echo ANNOUNCE-$version ; } | sort -o inventory
 fi
 
 echo version = $version
-base=mdadm-$version.tar.gz
+base=blockbridge-mdadm-$version.tar.gz
 if [ " $arg" != " diff" ]
 then
   if [ -f $target/$base ]
@@ -53,7 +50,7 @@ then
     exit 1
   fi
   trap "rm $target/$base; exit" 1 2 3
-  git archive --prefix=mdadm-$version/ HEAD | gzip --best > $target/$base
+  git archive --prefix=blockbridge-mdadm-$version/ HEAD | gzip --best > $target/$base
   chmod a+r $target/$base
   ls -l $target/$base
   if tar tzf $target/$base | sed 's,[^/]*/,,' | sort | diff -u inventory -
@@ -62,26 +59,9 @@ then
        rm $target/$base
        exit 1
   fi
-  rpmbuild -ta $target/$base || exit 1
-  find /home/neilb/src/RPM -name "*mdadm-$version-*" \
-     -exec cp {} $target/RPM \;
-  cp ANNOUNCE-$version $target/ANNOUNCE
-  cp ChangeLog $target/ChangeLog
-  if [ " $arg" != " test" ]
-  then
-    echo -n "Confirm signing this release? "
-    read a
-    if [ " $a" != " y" ]; then echo OK - bye. ; exit 1; fi
-    if zcat $target/$base | gpg -ba > $target/$base.sign && gpg -ba $target/ANNOUNCE
-    then
-      kup put $target/$base  $target/$base.sign \
-	  /pub/linux/utils/raid/mdadm/mdadm-$version.tar.gz
-      kup put $target/ANNOUNCE $target/ANNOUNCE.asc /pub/linux/utils/raid/mdadm/ANNOUNCE
-    else
-      echo signing failed
-      exit 1
-    fi
-  fi
+  rpmbuild --define "_topdir $target/RPMBUILD" --define "BB_BUILD_NUMBER ${BUILD_NUMBER}" --define "_sbindir /bb/sbin" -ta $target/$base || exit 1
+  find $target/RPMBUILD -name "*mdadm-$version-*" \
+     -exec cp {} . \;
 else
   if [ ! -f $target/$base ]
   then

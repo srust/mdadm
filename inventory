@@ -45,6 +45,7 @@ ReadMe.c
 TODO
 bitmap.c
 bitmap.h
+blockbridge-mdadm.spec
 config.c
 crc32.c
 crc32.h
@@ -72,7 +73,6 @@ mdadm.c
 mdadm.conf-example
 mdadm.conf.5
 mdadm.h
-mdadm.spec
 mdassemble.8
 mdassemble.c
 mdmon-design.txt
