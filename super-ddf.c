@@ -2238,9 +2238,9 @@ static void make_header_guid(char *guid)
 	 * Remaining 8 random number plus timestamp
 	 */
 	memcpy(guid, T10, sizeof(T10));
-	stamp = cpu_to_be32(0xdeadbeef);
+	stamp = cpu_to_be32(0xbb11bb11);
 	memcpy(guid+8, &stamp, 4);
-	stamp = cpu_to_be32(0);
+	stamp = cpu_to_be32(0xbb11bb11);
 	memcpy(guid+12, &stamp, 4);
 	stamp = cpu_to_be32(time(0) - DECADE);
 	memcpy(guid+16, &stamp, 4);
@@ -3581,6 +3581,8 @@ static int load_super_ddf_all(struct supertype *st, int fd,
 	char nm[20];
 	int dfd;
 
+	dprintf("load_super_ddf_all()");
+
 	sra = sysfs_read(fd, 0, GET_LEVEL|GET_VERSION|GET_DEVS|GET_STATE);
 	if (!sra)
 		return 1;
@@ -3598,8 +3600,11 @@ static int load_super_ddf_all(struct supertype *st, int fd,
 		int rv;
 		sprintf(nm, "%d:%d", sd->disk.major, sd->disk.minor);
 		dfd = dev_open(nm, O_RDONLY);
-		if (dfd < 0)
-			return 2;
+		if (dfd < 0) {
+			dprintf("load_super_ddf_all: failed to open device %d:%d\n",
+					sd->disk.major, sd->disk.minor);
+			continue;
+		}
 		rv = load_ddf_headers(dfd, super, NULL);
 		close(dfd);
 		if (rv == 0) {
@@ -3628,13 +3633,19 @@ static int load_super_ddf_all(struct supertype *st, int fd,
 
 		sprintf(nm, "%d:%d", sd->disk.major, sd->disk.minor);
 		dfd = dev_open(nm, O_RDWR);
-		if (dfd < 0)
-			return 2;
+		if (dfd < 0) {
+			dprintf("load_super_ddf_all: failed to open device %d:%d\n",
+					sd->disk.major, sd->disk.minor);
+			continue;
+		}
 		rv = load_ddf_headers(dfd, super, NULL);
 		if (rv == 0)
 			rv = load_ddf_local(dfd, super, NULL, 1);
-		if (rv)
-			return 1;
+		if (rv) {
+			dprintf("load_super_ddf_all: unable to read metadata from device %d:%d\n",
+					sd->disk.major, sd->disk.minor);
+			continue;
+		}
 	}
 
 	*sbp = super;

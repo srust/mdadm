@@ -178,7 +178,7 @@ struct mdstat_ent *mdstat_read(int hold, int start)
 		ent->active = -1;
 		ent->resync = 0;
 		ent->metadata_version = NULL;
-		ent->raid_disks = 0;
+		ent->raid_disks = -1;
 		ent->devcnt = 0;
 		ent->members = NULL;
 
@@ -221,7 +221,7 @@ struct mdstat_ent *mdstat_read(int hold, int start)
 				   dl_next(w) != line) {
 				w = dl_next(w);
 				ent->metadata_version = xstrdup(w);
-			} else if (w[0] == '[' && isdigit(w[1])) {
+			} else if (ent->raid_disks < 0 && w[0] == '[' && isdigit(w[1])) {
 				ent->raid_disks = atoi(w+1);
 			} else if (!ent->pattern &&
 				 w[0] == '[' &&
