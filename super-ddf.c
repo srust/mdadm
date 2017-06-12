@@ -493,6 +493,8 @@ struct ddf_super {
 				int raiddisk; /* slot to fill in autolayout */
 				__u64 esize;
 				int displayed;
+				int readd;
+				int state;
 			};
 		};
 		struct disk_data disk;
@@ -2188,7 +2190,7 @@ static int update_super_ddf(struct supertype *st, struct mdinfo *info,
 	 *  summaries:  update redundant counters.
 	 */
 	int rv = 0;
-//	struct ddf_super *ddf = st->sb;
+	struct ddf_super *ddf = st->sb;
 //	struct vd_config *vd = find_vdcr(ddf, info->container_member);
 //	struct virtual_entry *ve = find_ve(ddf);
 
@@ -2198,7 +2200,9 @@ static int update_super_ddf(struct supertype *st, struct mdinfo *info,
 	 * will just happen.
 	 */
 
-	if (strcmp(update, "grow") == 0) {
+	if (strcmp(update, "force-one") == 0) {
+		ddf->active->seq = cpu_to_be32(info->events);
+	} else if (strcmp(update, "grow") == 0) {
 		/* FIXME */
 	} else if (strcmp(update, "resync") == 0) {
 //		info->resync_checkpoint = 0;
@@ -2896,6 +2900,12 @@ static int add_to_super_ddf(struct supertype *st,
 	dd->fd = fd;
 	dd->spare = NULL;
 
+	// re-add
+	if (dk->raid_disk >= 0) {
+		dd->readd = 1;
+		dd->state = dk->state;
+	}
+
 	dd->disk.magic = DDF_PHYS_DATA_MAGIC;
 	now = time(0);
 	tm = localtime(&now);
@@ -3581,7 +3591,7 @@ static int load_super_ddf_all(struct supertype *st, int fd,
 	char nm[20];
 	int dfd;
 
-	dprintf("load_super_ddf_all()");
+	dprintf("load_super_ddf_all()\n");
 
 	sra = sysfs_read(fd, 0, GET_LEVEL|GET_VERSION|GET_DEVS|GET_STATE);
 	if (!sra)
@@ -5215,15 +5225,17 @@ static struct mdinfo *ddf_activate_spare(struct active_array *a,
 			di->disk.raid_disk = i;
 			di->disk.major = dl->major;
 			di->disk.minor = dl->minor;
-			di->disk.state = 0;
-			di->recovery_start = 0;
+			di->disk.state = dl->readd ? dl->state : 0;
+			di->recovery_start = dl->readd ? MaxSector : 0;
 			di->data_offset = pos;
 			di->component_size = a->info.component_size;
 			di->next = rv;
 			rv = di;
-			dprintf("%d:%d (%08x) to be %d at %llu\n",
+			const char *detail = dl->readd ? "(re-add)" : "(new)";
+			dprintf("%d:%d (%08x) to be %d at %llu %s\n",
 				dl->major, dl->minor,
-				be32_to_cpu(dl->disk.refnum), i, pos);
+				be32_to_cpu(dl->disk.refnum), i, pos,
+				detail);
 
 			break;
 		}
