@@ -2835,13 +2835,13 @@ static void _set_config_size(struct phys_disk_entry *pde, const struct dl *dl)
 	if (t < cfs) {
 		__u64 wsp = cfs - t;
 		if (wsp > 1024*1024*2ULL && wsp > dl->size / 16) {
-			pr_err("%x:%x: workspace size 0x%llx too big, ignoring\n",
+			pr_err("%d:%d: workspace size 0x%llx too big, ignoring\n",
 			       dl->major, dl->minor, (unsigned long long)wsp);
 		} else
 			cfs = t;
 	}
 	pde->config_size = cpu_to_be64(cfs);
-	dprintf("%x:%x config_size %llx, DDF structure is %llx blocks\n",
+	dprintf("%d:%d config_size %llx, DDF structure is %llx blocks\n",
 		dl->major, dl->minor,
 		(unsigned long long)cfs, (unsigned long long)(dl->size-cfs));
 }
@@ -3095,10 +3095,10 @@ static int __write_ddf_structure(struct dl *d, struct ddf_super *ddf, __u8 type)
 					&dummy);
 		}
 		if (vdc) {
-			dprintf("writing conf record %i on disk %08x for %s/%u\n",
-				i, be32_to_cpu(d->disk.refnum),
-				guid_str(vdc->guid),
-				vdc->sec_elmnt_seq);
+			dprintf("writing conf record %i on disk %08x for %s/%u (%d bytes)\n",
+                    i, be32_to_cpu(d->disk.refnum),
+                    guid_str(vdc->guid),
+                    vdc->sec_elmnt_seq, buf_size);
 			vdc->crc = calc_crc(vdc, conf_size);
 			memcpy(conf + i*conf_size, vdc, conf_size);
 		} else
@@ -4284,7 +4284,10 @@ static int get_bvd_state(const struct ddf_super *ddf,
 				state = DDF_state_part_optimal;
 			break;
 		}
-	return state;
+
+    free(avail);
+
+    return state;
 }
 
 static int secondary_state(int state, int other, int seclevel)
@@ -4408,9 +4411,10 @@ static void ddf_set_disk(struct active_array *a, int n, int state)
 			update = 1;
 	}
 
-	dprintf("ddf: set_disk %d (%08x) to %x->%02x\n", n,
-		be32_to_cpu(dl->disk.refnum), state,
-		be16_to_cpu(ddf->phys->entries[pd].state));
+	dprintf("ddf: set_disk %d (%08x) to %x->%02x%s\n", n,
+            be32_to_cpu(dl->disk.refnum), state,
+            be16_to_cpu(ddf->phys->entries[pd].state),
+            (state & DS_FAULTY) ? " (faulty)" : "");
 
 	/* Now we need to check the state of the array and update
 	 * virtual_disk.entries[n].state.
@@ -4446,6 +4450,65 @@ static void ddf_sync_metadata(struct supertype *st)
 	ddf->updates_pending = 0;
 	__write_init_super_ddf(st);
 	dprintf("ddf: sync_metadata\n");
+}
+
+// needs a bunch of work. XXX - MJA
+//
+// When we probe the devices, we need to
+//
+//  1. only probe the devices in the subarray
+//  2. track which exact ones are available (for raid-1e)
+//  3. excluding any faulty ones
+//
+static int ddf_probe_devices_enough(const struct ddf_super *ddf,
+				    int working)
+{
+    dprintf("ddf: probe_devices working:%d\n", working);
+    return working >= 2;
+}
+
+static int ddf_probe_device(struct ddf_super *ddf, struct dl *d)
+{
+	struct ddf_header *header = &ddf->primary;
+	unsigned long long lba = be64_to_cpu(header->primary_lba);
+	static void *buf = NULL;
+	int fd = d->fd;
+
+	// allocate scratch space
+	if (!buf) {
+		if (posix_memalign(&buf, 4096, 4096) != 0)
+			return 0;
+	}
+
+	fd = d->fd;
+
+	if (lseek64(fd, lba<<9, 0) < 0) {
+		pr_err("fd:%d lba:0x%llx lseek64 failed: %m\n", fd, lba);
+		return 0;
+	}
+
+	if (read(fd, buf, 512) < 0) {
+		pr_err("fd:%d lba:0x%llx read failed: %m\n", fd, lba);
+		return 0;
+	}
+
+	return 1;
+}
+
+
+static int ddf_probe_devices(struct supertype *st)
+{
+	struct ddf_super *ddf = st->sb;
+	struct dl *d;
+	int working = 0;
+
+	pr_state(ddf, __func__);
+
+	for (d = ddf->dlist; d; d=d->next) {
+		working += ddf_probe_device(ddf, d);
+	}
+
+	return ddf_probe_devices_enough(ddf, working);
 }
 
 static int del_from_conflist(struct vcl **list, const char *guid)
@@ -5090,7 +5153,7 @@ static struct mdinfo *ddf_activate_spare(struct active_array *a,
 				if (d2->state_fd >= 0 &&
 				    d2->disk.major == dl->major &&
 				    d2->disk.minor == dl->minor) {
-					dprintf("%x:%x (%08x) already in array\n",
+					dprintf("%d:%d (%08x) already in array\n",
 						dl->major, dl->minor,
 						be32_to_cpu(dl->disk.refnum));
 					break;
@@ -5128,7 +5191,7 @@ static struct mdinfo *ddf_activate_spare(struct active_array *a,
 			}
 			if ( ! (is_dedicated ||
 				(is_global && global_ok))) {
-				dprintf("%x:%x not suitable: %d %d\n", dl->major, dl->minor,
+				dprintf("%d:%d not suitable: %d %d\n", dl->major, dl->minor,
 					is_dedicated, is_global);
 				continue;
 			}
@@ -5139,7 +5202,7 @@ static struct mdinfo *ddf_activate_spare(struct active_array *a,
 			pos = find_space(ddf, dl, INVALID_SECTORS, &esize);
 
 			if (esize < a->info.component_size) {
-				dprintf("%x:%x has no room: %llu %llu\n",
+				dprintf("%d:%d has no room: %llu %llu\n",
 					dl->major, dl->minor,
 					esize, a->info.component_size);
 				/* No room */
@@ -5158,7 +5221,7 @@ static struct mdinfo *ddf_activate_spare(struct active_array *a,
 			di->component_size = a->info.component_size;
 			di->next = rv;
 			rv = di;
-			dprintf("%x:%x (%08x) to be %d at %llu\n",
+			dprintf("%d:%d (%08x) to be %d at %llu\n",
 				dl->major, dl->minor,
 				be32_to_cpu(dl->disk.refnum), i, pos);
 
@@ -5304,6 +5367,7 @@ struct superswitch super_ddf = {
 	.process_update	= ddf_process_update,
 	.prepare_update	= ddf_prepare_update,
 	.activate_spare = ddf_activate_spare,
+	.probe_devices  = ddf_probe_devices,
 #endif
 	.name = "ddf",
 };

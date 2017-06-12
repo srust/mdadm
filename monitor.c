@@ -412,6 +412,7 @@ static int read_and_act(struct active_array *a, fd_set *fds)
 	int ret = 0;
 	int count = 0;
 	struct timeval tv;
+	int needs_probe = 0;
 
 	a->next_state = bad_word;
 	a->next_action = bad_action;
@@ -437,9 +438,14 @@ static int read_and_act(struct active_array *a, fd_set *fds)
 			mdi->curr_state = read_dev_state(mdi->state_fd);
 		}
 
-        if (mdi->curr_state & DS_WRITE_ERROR)
-            dprintf("curr_state: WRITE_ERROR: disk %d\n",
-                    mdi->disk.raid_disk);
+		if (mdi->curr_state & DS_WRITE_ERROR) {
+			needs_probe++;
+			dprintf("curr_state: WRITE_ERROR: disk %d\n",
+				mdi->disk.raid_disk);
+		}
+		if (mdi->curr_state & DS_FAULTY)
+			needs_probe++;
+
 		/*
 		 * If array is blocked and metadata handler is able to handle
 		 * BB, check if you can acknowledge them to md driver. If
@@ -464,6 +470,18 @@ static int read_and_act(struct active_array *a, fd_set *fds)
 		sync_actions[a->prev_action],
 		a->info.resync_start
 		);
+
+	// Blockbridge Partition Fencing
+	//
+	// Rather than take action persistently when there aren't
+	// enough devices in the array, exit mdmon immediately.
+	// Monitoring processes will take action as necessary.
+	if (needs_probe && a->container->ss->probe_devices) {
+		if (!a->container->ss->probe_devices(a->container)) {
+			fprintf(stderr, "monitor: array partitioned; exiting!\n");
+			exit(1);
+		}
+	}
 
 	if ((a->curr_state == bad_word || a->curr_state <= inactive) &&
 	    a->prev_state > inactive) {

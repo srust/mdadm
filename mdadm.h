@@ -1071,6 +1071,9 @@ extern struct superswitch {
 	/* get list of bad blocks from metadata */
 	struct md_bb *(*get_bad_blocks)(struct active_array *a, int n);
 
+	/* return nonzero if enough devices are readable */
+	int (*probe_devices)(struct supertype *st);
+
 	int swapuuid; /* true if uuid is bigending rather than hostendian */
 	int external;
 	const char *name; /* canonical metadata name */
