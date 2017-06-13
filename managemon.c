@@ -260,57 +260,6 @@ static void queue_metadata_update(struct metadata_update *mu)
 	*qp = mu;
 }
 
-static void add_disk_to_container(struct supertype *st, struct mdinfo *sd)
-{
-	int dfd;
-	char nm[20];
-	struct supertype *st2;
-	struct metadata_update *update = NULL;
-	struct mdinfo info;
-	mdu_disk_info_t dk = {
-		.number = -1,
-		.major = sd->disk.major,
-		.minor = sd->disk.minor,
-		.raid_disk = -1,
-		.state = 0,
-	};
-
-	dprintf("add %d:%d to container\n", sd->disk.major, sd->disk.minor);
-
-	sd->next = st->devs;
-	st->devs = sd;
-
-	sprintf(nm, "%d:%d", sd->disk.major, sd->disk.minor);
-	dfd = dev_open(nm, O_RDWR);
-	if (dfd < 0)
-		return;
-
-	/* Check the metadata and see if it is already part of this
-	 * array
-	 */
-	st2 = dup_super(st);
-	if (st2->ss->load_super(st2, dfd, NULL) == 0) {
-		st2->ss->getinfo_super(st2, &info, NULL);
-		if (st->ss->compare_super(st, st2) == 0 &&
-		    info.disk.raid_disk >= 0) {
-			/* Looks like a good member of array.
-			 * Just accept it.
-			 * mdadm will incorporate any parts into
-			 * active arrays.
-			 */
-			st2->ss->free_super(st2);
-			return;
-		}
-	}
-	st2->ss->free_super(st2);
-
-	st->update_tail = &update;
-	st->ss->add_to_super(st, &dk, dfd, NULL, INVALID_SECTORS);
-	st->ss->write_init_super(st);
-	queue_metadata_update(update);
-	st->update_tail = NULL;
-}
-
 /*
  * Create and queue update structure about the removed disks.
  * The update is prepared by super type handler and passed to the monitor
@@ -335,6 +284,79 @@ static void remove_disk_from_container(struct supertype *st, struct mdinfo *sd)
 	 * We have it after add_to_super to write to new device,
 	 * but with 'remove' we don't ant to write to that device!
 	 */
+	st->ss->write_init_super(st);
+	queue_metadata_update(update);
+	st->update_tail = NULL;
+}
+
+static void add_disk_to_container(struct supertype *st, struct mdinfo *sd)
+{
+	int dfd;
+	char nm[20];
+	struct supertype *st2;
+	struct metadata_update *update = NULL;
+	struct mdinfo new_info;
+	struct mdinfo dsk_info;
+	mdu_disk_info_t dk = {
+		.number = -1,
+		.major = sd->disk.major,
+		.minor = sd->disk.minor,
+		.raid_disk = -1,
+		.state = 0,
+	};
+
+	dprintf("add %d:%d to container\n", sd->disk.major, sd->disk.minor);
+
+	sd->next = st->devs;
+	st->devs = sd;
+
+	sprintf(nm, "%d:%d", sd->disk.major, sd->disk.minor);
+	dfd = dev_open(nm, O_RDWR);
+	if (dfd < 0)
+		return;
+
+	/* Check the metadata and see if it is already part of this
+	 * array
+	 */
+	st2 = dup_super(st);
+	if (st2->ss->load_super(st2, dfd, NULL) == 0) {
+		st->ss->getinfo_super(st, &dsk_info, NULL);
+		st2->ss->getinfo_super(st2, &new_info, NULL);
+
+		// try compare to determine if this is old disk from the same array
+		if (st->ss->compare_super(st, st2) == 0 &&
+		    new_info.disk.raid_disk >= 0) {
+
+			// re-add attempt: activate/in-sync/not-faulty
+			if ((new_info.disk.state & (1 << MD_DISK_ACTIVE)) &&
+				(new_info.disk.state & (1 << MD_DISK_SYNC)) &&
+				!(new_info.disk.state & (1 << MD_DISK_FAULTY)) &&
+				new_info.events <= dsk_info.events) {
+
+				dprintf("attempting re-add for %s\n", nm);
+
+				// Setting raid_disk and state make this a re-add
+				dk.number    = new_info.disk.number;
+				dk.raid_disk = new_info.disk.raid_disk;
+				dk.state     = new_info.disk.state;
+
+				// fall out of if to add_to_super()
+			} else {
+				/* Looks like a good member of array.
+				 * Just accept it.
+				 * mdadm will incorporate any parts into
+				 * active arrays.
+				 */
+				return;
+			}
+		}
+	}
+
+	st2->ss->free_super(st2);
+
+	// add or re-add
+	st->update_tail = &update;
+	st->ss->add_to_super(st, &dk, dfd, NULL, INVALID_SECTORS);
 	st->ss->write_init_super(st);
 	queue_metadata_update(update);
 	st->update_tail = NULL;

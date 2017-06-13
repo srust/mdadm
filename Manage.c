@@ -725,19 +725,58 @@ int attempt_re_add(int fd, int tfd, struct mddev_dev *dv,
 				return -1;
 			}
 		}
-		/* don't even try if disk is marked as faulty */
-		errno = 0;
-		if (ioctl(fd, ADD_NEW_DISK, &disc) == 0) {
+		if (tst->ss->external) {
+			struct mdinfo *sra;
+			int container_fd;
+			char devnm[32];
+
+			strcpy(devnm, fd2devnm(fd));
+
+			container_fd = open_dev_excl(devnm);
+			if (container_fd < 0) {
+				pr_err("add failed for %s: could not get exclusive access to container\n",
+					   dv->devname);
+				tst->ss->free_super(tst);
+				return -1;
+			}
+
+			sra = sysfs_read(container_fd, NULL, 0);
+			if (!sra) {
+				pr_err("add failed for %s: sysfs_read failed\n",
+					   dv->devname);
+				close(container_fd);
+				tst->ss->free_super(tst);
+				return -1;
+			}
+			sra->array.level = LEVEL_CONTAINER;
+			mdi.disk = disc;
+			mdi.recovery_start = 1;
+			pr_err("addingn back existing external disk\n");
+			if (sysfs_add_disk(sra, &mdi, 0) != 0) {
+				pr_err("add new device to external metadata failed for %s\n", dv->devname);
+				close(container_fd);
+				sysfs_free(sra);
+				return -1;
+			}
+			ping_monitor(devnm);
 			if (verbose >= 0)
-				pr_err("re-added %s\n", dv->devname);
+				pr_err("re-added to external array %s\n", dv->devname);
 			return 1;
-		}
-		if (errno == ENOMEM || errno == EROFS) {
-			pr_err("add new device failed for %s: %s\n",
-			       dv->devname, strerror(errno));
-			if (dv->disposition == 'M')
-				return 0;
-			return -1;
+		} else {
+			/* don't even try if disk is marked as faulty */
+			errno = 0;
+			if (ioctl(fd, ADD_NEW_DISK, &disc) == 0) {
+				if (verbose >= 0)
+					pr_err("re-added %s\n", dv->devname);
+				return 1;
+			}
+			if (errno == ENOMEM || errno == EROFS) {
+				pr_err("add new device failed for %s: %s\n",
+					   dv->devname, strerror(errno));
+				if (dv->disposition == 'M')
+					return 0;
+				return -1;
+			}
 		}
 	}
 skip_re_add:
@@ -789,8 +828,10 @@ int Manage_add(int fd, int tfd, struct mddev_dev *dv,
 		return -1;
 	}
 
-	if (array->not_persistent == 0 || tst->ss->external) {
+	pr_err("external? %d\n", tst->ss->external);
+	pr_err("not_pers == 0? %d\n", array->not_persistent == 0);
 
+	if (array->not_persistent == 0 || tst->ss->external) {
 		/* need to find a sample superblock to copy, and
 		 * a spare slot to use.
 		 * For 'external' array (well, container based),
@@ -801,7 +842,8 @@ int Manage_add(int fd, int tfd, struct mddev_dev *dv,
 			/* already loaded */;
 		else if (tst->ss->external) {
 			tst->ss->load_container(tst, fd, NULL);
-		} else for (j = 0; j < tst->max_devs; j++) {
+		} else {
+			for (j = 0; j < tst->max_devs; j++) {
 				char *dev;
 				int dfd;
 				disc.number = j;
@@ -826,6 +868,8 @@ int Manage_add(int fd, int tfd, struct mddev_dev *dv,
 				close(dfd);
 				break;
 			}
+		}
+
 		/* FIXME this is a bad test to be using */
 		if (!tst->sb && (dv->disposition != 'a'
 				 && dv->disposition != 'S')) {
@@ -855,21 +899,19 @@ int Manage_add(int fd, int tfd, struct mddev_dev *dv,
 		 * is now being re-added.  If so, we can
 		 * simply re-add it.
 		 */
+		dev_st = dup_super(tst);
+		dev_st->ss->load_super(dev_st, tfd, NULL);
+		if (dev_st->sb && dv->disposition != 'S') {
+			int rv;
 
-		if (array->not_persistent == 0) {
-			dev_st = dup_super(tst);
-			dev_st->ss->load_super(dev_st, tfd, NULL);
-			if (dev_st->sb && dv->disposition != 'S') {
-				int rv;
-
-				rv = attempt_re_add(fd, tfd, dv, dev_st, tst,
-						    rdev, update, devname,
-						    verbose, array);
-				dev_st->ss->free_super(dev_st);
-				if (rv)
-					return rv;
-			}
+			rv = attempt_re_add(fd, tfd, dv, dev_st, tst,
+						rdev, update, devname,
+						verbose, array);
+			dev_st->ss->free_super(dev_st);
+			if (rv)
+				return rv;
 		}
+
 		if (dv->disposition == 'M') {
 			if (verbose > 0)
 				pr_err("--re-add for %s to %s is not possible\n",
