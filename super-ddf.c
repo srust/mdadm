@@ -493,6 +493,9 @@ struct ddf_super {
 				int raiddisk; /* slot to fill in autolayout */
 				__u64 esize;
 				int displayed;
+
+				/* Added by Blockbridge for partition fencing */
+				int probe_ok;
 			};
 		};
 		struct disk_data disk;
@@ -536,6 +539,9 @@ static int init_super_ddf_bvd(struct supertype *st,
 			      unsigned long long size,
 			      char *name, char *homehost,
 			      int *uuid, unsigned long long data_offset);
+static int raid10_degraded(struct ddf_super *ddf,
+			   struct mdinfo *info,
+			   int probe);
 
 #if DEBUG
 static void pr_state(struct ddf_super *ddf, const char *msg)
@@ -4227,8 +4233,24 @@ static int ddf_set_array_state(struct active_array *a, int consistent)
 	return consistent;
 }
 
+static int bvd_probe_device_online(const struct ddf_super *ddf, int pd)
+{
+	struct dl *d;
+		
+	for (d = ddf->dlist; d; d = d->next) {
+		if (d->pdnum == pd) {
+			dprintf("pd:%d found_refnum:%u\n",
+				pd, be32_to_cpu(d->disk.refnum));
+			return d->probe_ok;
+		}
+	}
+
+	return 0;
+}
+
 static int get_bvd_state(const struct ddf_super *ddf,
-			 const struct vd_config *vc)
+			 const struct vd_config *vc,
+			 int probe)
 {
 	unsigned int i, n_bvd, working = 0;
 	unsigned int n_prim = be16_to_cpu(vc->prim_elmnt_count);
@@ -4239,11 +4261,26 @@ static int get_bvd_state(const struct ddf_super *ddf,
 	layout_ddf2md(vc, &array);
 
 	for (i = 0; i < n_prim; i++) {
+		dprintf("i:%d\n", i);
 		if (!find_index_in_bvd(ddf, vc, i, &n_bvd))
 			continue;
 		pd = find_phys(ddf, vc->phys_refnum[n_bvd]);
+		dprintf("i:%d n_bvd:%u phys_refnum:%u pd:%d\n", i, n_bvd,
+			be32_to_cpu(vc->phys_refnum[n_bvd]), pd);
 		if (pd < 0)
 			continue;
+		dprintf("i:%d refnum_indirect:%u\n", i,
+			be32_to_cpu(ddf->phys->entries[pd].refnum));
+
+		if (probe) {
+			if (!bvd_probe_device_online(ddf, pd)) {
+				dprintf("i:%d pd:%d probe OFFLINE\n", i, pd);
+				continue;
+			}
+			else 
+				dprintf("i:%d pd:%d probe online\n", i, pd);
+		}
+		
 		st = be16_to_cpu(ddf->phys->entries[pd].state);
 		if ((st & (DDF_Online|DDF_Failed|DDF_Rebuilding))
 		    == DDF_Online) {
@@ -4311,12 +4348,12 @@ static int secondary_state(int state, int other, int seclevel)
 
 static int get_svd_state(const struct ddf_super *ddf, const struct vcl *vcl)
 {
-	int state = get_bvd_state(ddf, &vcl->conf);
+	int state = get_bvd_state(ddf, &vcl->conf, 0);
 	unsigned int i;
 	for (i = 1; i < vcl->conf.sec_elmnt_count; i++) {
 		state = secondary_state(
 			state,
-			get_bvd_state(ddf, vcl->other_bvds[i-1]),
+			get_bvd_state(ddf, vcl->other_bvds[i-1], 0),
 			vcl->conf.srl);
 	}
 	return state;
@@ -4452,19 +4489,49 @@ static void ddf_sync_metadata(struct supertype *st)
 	dprintf("ddf: sync_metadata\n");
 }
 
-// needs a bunch of work. XXX - MJA
-//
 // When we probe the devices, we need to
 //
 //  1. only probe the devices in the subarray
 //  2. track which exact ones are available (for raid-1e)
 //  3. excluding any faulty ones
 //
-static int ddf_probe_devices_enough(const struct ddf_super *ddf,
-				    int working)
+static int ddf_probe_devices_enough(struct active_array *a, int working)
 {
-    dprintf("ddf: probe_devices working:%d\n", working);
-    return working >= 2;
+	struct supertype *st = a->container;
+	struct ddf_super *ddf = st->sb;
+
+	dprintf("ddf: probe_devices_enough working:%d\n", working);
+
+	if (working == a->info.array.raid_disks)
+		return 1; /* array not degraded */
+
+	switch (a->info.array.level) {
+	case 1:
+		if (working == 0)
+			return 0;
+		break;
+	case 4:
+	case 5:
+		if (working < a->info.array.raid_disks - 1)
+			return 0;
+		break;
+	case 6:
+		if (working < a->info.array.raid_disks - 2)
+			return 0;
+		break;
+	case 10:
+		// 2:good, 1:degraded, 0:failed, -1:error
+		// takes into account probe results
+		if (raid10_degraded(ddf, &a->info, 1) < 1)
+			return 0;
+		break;
+	default:
+		// RAID 0: requires all disks
+		// else, not supported
+		return 0;
+	}
+
+	return 1;
 }
 
 static int ddf_probe_device(struct ddf_super *ddf, struct dl *d)
@@ -4473,6 +4540,24 @@ static int ddf_probe_device(struct ddf_super *ddf, struct dl *d)
 	unsigned long long lba = be64_to_cpu(header->primary_lba);
 	static void *buf = NULL;
 	int fd = d->fd;
+	unsigned state = be16_to_cpu(ddf->phys->entries[d->pdnum].state);
+
+	dprintf("fd:%d pdnum:%d raiddisk:%d refnum:%u "
+		"refnum_indirect:%u state:%u %d:%d\n",
+		d->fd, d->pdnum, d->raiddisk,
+		be32_to_cpu(d->disk.refnum),
+		be32_to_cpu(ddf->phys->entries[d->pdnum].refnum),
+		state, d->major, d->minor);
+
+	if ((state & (DDF_Failed|DDF_Rebuilding|DDF_Missing))) {
+		if (state & DDF_Failed)
+			dprintf("fd:%d state:failed\n", fd);
+		else if (state & DDF_Rebuilding)
+			dprintf("fd:%d state:rebuilding\n", fd);
+		else
+			dprintf("fd:%d state:missing\n", fd);
+		return 0;
+	}
 
 	// allocate scratch space
 	if (!buf) {
@@ -4495,9 +4580,9 @@ static int ddf_probe_device(struct ddf_super *ddf, struct dl *d)
 	return 1;
 }
 
-
-static int ddf_probe_devices(struct supertype *st)
+static int ddf_probe_devices(struct active_array *a)
 {
+	struct supertype *st = a->container;
 	struct ddf_super *ddf = st->sb;
 	struct dl *d;
 	int working = 0;
@@ -4505,10 +4590,12 @@ static int ddf_probe_devices(struct supertype *st)
 	pr_state(ddf, __func__);
 
 	for (d = ddf->dlist; d; d=d->next) {
-		working += ddf_probe_device(ddf, d);
+		int ok = ddf_probe_device(ddf, d);
+		working += ok;
+		d->probe_ok = ok;
 	}
 
-	return ddf_probe_devices_enough(ddf, working);
+	return ddf_probe_devices_enough(a, working);
 }
 
 static int del_from_conflist(struct vcl **list, const char *guid)
@@ -4992,7 +5079,9 @@ static int ddf_prepare_update(struct supertype *st,
  * Check degraded state of a RAID10.
  * returns 2 for good, 1 for degraded, 0 for failed, and -1 for error
  */
-static int raid10_degraded(struct ddf_super *ddf, struct mdinfo *info)
+static int raid10_degraded(struct ddf_super *ddf,
+			   struct mdinfo *info,
+			   int probe)
 {
 	int n_prim, n_bvds;
 	int i;
@@ -5005,7 +5094,7 @@ static int raid10_degraded(struct ddf_super *ddf, struct mdinfo *info)
 	struct vcl *vcl;
 	struct vd_config *vc = find_vdcr(ddf, info->container_member, 0, &n_bvd, &vcl);
 	if (vc && vc->prl == DDF_RAID1E) {
-		int state = get_bvd_state(ddf, vc);
+		int state = get_bvd_state(ddf, vc, probe);
 		switch (state) {
 		case DDF_state_degraded:
 			return 1;
@@ -5112,7 +5201,7 @@ static struct mdinfo *ddf_activate_spare(struct active_array *a,
 			return NULL; /* failed */
 		break;
 	case 10:
-		if (raid10_degraded(ddf, &a->info) < 1)
+		if (raid10_degraded(ddf, &a->info, 0) < 1)
 			return NULL;
 		break;
 	default: /* concat or stripe */

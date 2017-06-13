@@ -1072,7 +1072,7 @@ extern struct superswitch {
 	struct md_bb *(*get_bad_blocks)(struct active_array *a, int n);
 
 	/* return nonzero if enough devices are readable */
-	int (*probe_devices)(struct supertype *st);
+	int (*probe_devices)(struct active_array *a);
 
 	int swapuuid; /* true if uuid is bigending rather than hostendian */
 	int external;

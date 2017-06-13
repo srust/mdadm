@@ -443,8 +443,11 @@ static int read_and_act(struct active_array *a, fd_set *fds)
 			dprintf("curr_state: WRITE_ERROR: disk %d\n",
 				mdi->disk.raid_disk);
 		}
-		if (mdi->curr_state & DS_FAULTY)
+		if (mdi->curr_state & DS_FAULTY) {
 			needs_probe++;
+			dprintf("curr_state: FAULTY: disk %d\n",
+				mdi->disk.raid_disk);
+		}
 
 		/*
 		 * If array is blocked and metadata handler is able to handle
@@ -470,18 +473,6 @@ static int read_and_act(struct active_array *a, fd_set *fds)
 		sync_actions[a->prev_action],
 		a->info.resync_start
 		);
-
-	// Blockbridge Partition Fencing
-	//
-	// Rather than take action persistently when there aren't
-	// enough devices in the array, exit mdmon immediately.
-	// Monitoring processes will take action as necessary.
-	if (needs_probe && a->container->ss->probe_devices) {
-		if (!a->container->ss->probe_devices(a->container)) {
-			fprintf(stderr, "monitor: array partitioned; exiting!\n");
-			exit(1);
-		}
-	}
 
 	if ((a->curr_state == bad_word || a->curr_state <= inactive) &&
 	    a->prev_state > inactive) {
@@ -637,6 +628,20 @@ static int read_and_act(struct active_array *a, fd_set *fds)
 		}
 		a->container->ss->set_array_state(a, a->curr_state <= clean);
 		a->last_checkpoint = sync_completed;
+	}
+
+	// Blockbridge Partition Fencing
+	//
+	// Must be run prior to synchronizing the metadata.
+	//
+	// Rather than take action persistently when there aren't
+	// enough devices in the array, exit mdmon immediately.
+	// Monitoring processes will take action as necessary.
+	if (needs_probe && a->container->ss->probe_devices) {
+		if (!a->container->ss->probe_devices(a)) {
+			fprintf(stderr, "monitor: array partitioned; exiting!\n");
+			exit(1);
+		}
 	}
 
 	if (sync_completed > a->last_checkpoint)
