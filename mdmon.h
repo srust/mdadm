@@ -84,6 +84,7 @@ struct mdstat_ent *mdstat_read(int hold, int start);
 extern int exit_now, manager_ready;
 extern int mon_tid, mgr_tid;
 extern int monitor_loop_cnt;
+extern int probe_enabled;
 
 /* helper routine to determine resync completion since MaxSector is a
  * moving target

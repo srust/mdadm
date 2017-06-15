@@ -75,6 +75,7 @@ struct active_array *pending_discard;
 int mon_tid, mgr_tid;
 
 int sigterm;
+int probe_enabled = 1;
 
 #ifdef USE_PTHREADS
 static void *run_child(void *v)
@@ -298,6 +299,7 @@ int main(int argc, char *argv[])
 		{"help", 0, NULL, 'h'},
 		{"offroot", 0, NULL, OffRootOpt},
 		{"foreground", 0, NULL, 'F'},
+		{"no-probe", 0, NULL, 'N'},
 		{NULL, 0, NULL, 0}
 	};
 
@@ -310,7 +312,7 @@ int main(int argc, char *argv[])
 		argv[0][0] = '@';
 	}
 
-	while ((opt = getopt_long(argc, argv, "thaF", options, NULL)) != -1) {
+	while ((opt = getopt_long(argc, argv, "thaFN", options, NULL)) != -1) {
 		switch (opt) {
 		case 'a':
 			container_name = argv[optind-1];
@@ -325,6 +327,10 @@ int main(int argc, char *argv[])
 		case OffRootOpt:
 			argv[0][0] = '@';
 			break;
+        case 'N':
+            probe_enabled = 0;
+            dprintf("Array partition probing disabled.\n");
+            break;
 		case 'h':
 		default:
 			usage();

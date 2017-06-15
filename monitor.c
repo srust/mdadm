@@ -637,7 +637,7 @@ static int read_and_act(struct active_array *a, fd_set *fds)
 	// Rather than take action persistently when there aren't
 	// enough devices in the array, exit mdmon immediately.
 	// Monitoring processes will take action as necessary.
-	if (needs_probe && a->container->ss->probe_devices) {
+	if (needs_probe && probe_enabled && a->container->ss->probe_devices) {
 		if (!a->container->ss->probe_devices(a)) {
 			fprintf(stderr, "monitor: array partitioned; exiting!\n");
 			exit(1);
