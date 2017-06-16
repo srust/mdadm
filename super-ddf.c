@@ -5302,12 +5302,13 @@ static struct mdinfo *ddf_activate_spare(struct active_array *a,
 				continue;
 			}
 
-			vc = find_vdcr(ddf, a->info.container_member, 0, &n_bvd, &vcl);
+			unsigned int index = 0;
+			vc = find_vdcr(ddf, a->info.container_member, index, &n_bvd, &vcl);
 			if (!vc) {
 				pr_err("Unable to find existing virtual disk config from metadata\n");
 				data_offset = INVALID_SECTORS;
 			} else {
-				data_offset = be64_to_cpu(LBA_OFFSET(ddf, vc)[0]);
+				data_offset = be64_to_cpu(LBA_OFFSET(ddf, vc)[index]);
 			}
 
 			/* We are allowed to use this device - is there space?
