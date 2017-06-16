@@ -234,6 +234,7 @@ int Detail(char *dev, struct context *c)
 		if (container) {
 			printf("MD_CONTAINER=%s\n", container);
 			printf("MD_MEMBER=%s\n", member);
+			printf("MD_NAME=%s\n", info->name);
 		} else {
 			if (sra && sra->array.major_version < 0)
 				printf("MD_METADATA=%s\n", sra->text_version);
