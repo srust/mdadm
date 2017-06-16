@@ -1188,9 +1188,15 @@ static int load_super_ddf(struct supertype *st, int fd,
 	if (get_dev_size(fd, devname, &dsize) == 0)
 		return 1;
 
+#if 0
+	// Removed by Blockbridge
+	//
+	// We don't need to interoperate with hardware controllers.
+	// But, we do need to work on partitioned devices.
 	if (test_partition(fd))
 		/* DDF is not allowed on partitions */
 		return 1;
+#endif
 
 	/* 32M is a lower bound */
 	if (dsize <= 32*1024*1024) {

@@ -809,9 +809,17 @@ static dev_t choose_spare(struct state *from, struct state *to,
 			struct dev_policy *pol;
 			unsigned long long dev_size;
 
+            
+#if 0
+			// Removed by Blockbridge
+			//
+			// We don't need to interoperate with hardware
+			// controllers.  But, we do need to work on
+			// partitioned devices.
 			if (to->metadata->ss->external &&
-			    test_partition_from_id(from->devid[d]))
+				test_partition_from_id(from->devid[d]))
 				continue;
+#endif
 
 			if (min_size &&
 			    dev_size_from_id(from->devid[d], &dev_size) &&
