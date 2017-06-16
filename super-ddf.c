@@ -2472,11 +2472,11 @@ static int init_super_ddf(struct supertype *st,
 	for (i = strlen(T10) ; i+hostlen < 24; i++)
 		ddf->controller.guid[i] = ' ';
 
-	ddf->controller.type.vendor_id = cpu_to_be16(0xDEAD);
-	ddf->controller.type.device_id = cpu_to_be16(0xBEEF);
+	ddf->controller.type.vendor_id = cpu_to_be16(0xBB00);
+	ddf->controller.type.device_id = cpu_to_be16(0xBBBB);
 	ddf->controller.type.sub_vendor_id = cpu_to_be16(0);
 	ddf->controller.type.sub_device_id = cpu_to_be16(0);
-	memcpy(ddf->controller.product_id, "What Is My PID??", 16);
+	memcpy(ddf->controller.product_id, "Blockbridge", 16);
 	memset(ddf->controller.pad, 0xff, 8);
 	memset(ddf->controller.vendor_data, 0xff, 448);
 	if (homehost && strlen(homehost) < 440)
@@ -3287,7 +3287,7 @@ static __u64 avail_size_ddf(struct supertype *st, __u64 devsize,
 			    unsigned long long data_offset)
 {
 	/* We must reserve the last 32Meg */
-	if (devsize <= 32*1024*2)
+	if (devsize <= (32*1024*2))
 		return 0;
 	return devsize - 32*1024*2;
 }
@@ -3520,7 +3520,7 @@ validate_geometry_ddf_container(struct supertype *st,
 	}
 	close(fd);
 
-	*freesize = avail_size_ddf(st, ldsize >> 9, INVALID_SECTORS);
+	*freesize = avail_size_ddf(st, ldsize >> 9, data_offset);
 	if (*freesize == 0)
 		return 0;
 
@@ -5187,6 +5187,7 @@ static struct mdinfo *ddf_activate_spare(struct active_array *a,
 	struct vcl *vcl;
 	struct vd_config *vc;
 	unsigned int n_bvd;
+	unsigned long long data_offset;
 
 	for (d = a->info.devs ; d ; d = d->next) {
 		if ((d->curr_state & DS_FAULTY) &&
@@ -5301,10 +5302,18 @@ static struct mdinfo *ddf_activate_spare(struct active_array *a,
 				continue;
 			}
 
+			vc = find_vdcr(ddf, a->info.container_member, 0, &n_bvd, &vcl);
+			if (!vc) {
+				pr_err("Unable to find existing virtual disk config from metadata\n");
+				data_offset = INVALID_SECTORS;
+			} else {
+				data_offset = be64_to_cpu(LBA_OFFSET(ddf, vc)[0]);
+			}
+
 			/* We are allowed to use this device - is there space?
 			 * We need a->info.component_size sectors */
 			esize = a->info.component_size;
-			pos = find_space(ddf, dl, INVALID_SECTORS, &esize);
+			pos = find_space(ddf, dl, data_offset, &esize);
 
 			if (esize < a->info.component_size) {
 				dprintf("%d:%d has no room: %llu %llu\n",
@@ -5395,7 +5404,7 @@ static struct mdinfo *ddf_activate_spare(struct active_array *a,
 		}
 		vc->phys_refnum[i_prim] = ddf->phys->entries[dl->pdnum].refnum;
 		LBA_OFFSET(ddf, vc)[i_prim] = cpu_to_be64(di->data_offset);
-		dprintf("BVD %u gets %u: %08x at %llu\n", i_sec, i_prim,
+		dprintf("BVD %u gets %u: %08x at LBA offset 0x%llx\n", i_sec, i_prim,
 			be32_to_cpu(vc->phys_refnum[i_prim]),
 			be64_to_cpu(LBA_OFFSET(ddf, vc)[i_prim]));
 	}
