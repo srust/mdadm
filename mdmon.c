@@ -67,7 +67,7 @@
 #include	"mdadm.h"
 #include	"mdmon.h"
 
-char const Name[] = "mdmon";
+char const Name[256] = "mdmon";
 
 struct active_array *discard_this;
 struct active_array *pending_discard;
@@ -391,6 +391,8 @@ int main(int argc, char *argv[])
 			container_name);
 		exit(1);
 	}
+
+	//snprintf((char *)Name, sizeof Name, container_name);
 	return mdmon(devnm, dofork && do_fork(), takeover);
 }
 
@@ -552,10 +554,8 @@ static int mdmon(char *devnm, int must_fork, int takeover)
 	open("/dev/null", O_RDWR);
 	close(1);
 	ignore = dup(0);
-#ifndef DEBUG
 	close(2);
 	ignore = dup(0);
-#endif
 
 	/* This silliness is to stop the compiler complaining
 	 * that we ignore 'ignore'
