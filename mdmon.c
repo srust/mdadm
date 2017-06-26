@@ -441,6 +441,9 @@ static int mdmon(char *devnm, int must_fork, int takeover)
 				status = WEXITSTATUS(status);
 			}
 			close(pfd[0]);
+			close(0);
+			close(1);
+			close(2);
 			return status;
 		}
 	} else
@@ -553,8 +556,6 @@ static int mdmon(char *devnm, int must_fork, int takeover)
 	close(0);
 	open("/dev/null", O_RDWR);
 	close(1);
-	ignore = dup(0);
-	close(2);
 	ignore = dup(0);
 
 	/* This silliness is to stop the compiler complaining
