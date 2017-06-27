@@ -289,7 +289,8 @@ static void remove_disk_from_container(struct supertype *st, struct mdinfo *sd)
 	st->update_tail = NULL;
 }
 
-static void add_disk_to_container(struct supertype *st, struct mdinfo *sd)
+static void add_disk_to_container(struct supertype *st, struct mdinfo *sd,
+								  struct mdstat_ent *mdstat)
 {
 	int dfd;
 	char nm[20];
@@ -323,9 +324,18 @@ static void add_disk_to_container(struct supertype *st, struct mdinfo *sd)
 		st->ss->getinfo_super(st, &dsk_info, NULL);
 		st2->ss->getinfo_super(st2, &new_info, NULL);
 
-		// try compare to determine if this is old disk from the same array
+		struct mdinfo *bitmap_info = sysfs_read(-1, mdstat->devnm, GET_BITMAP_LOCATION);
+		if (!bitmap_info) {
+			dprintf("could not read bitmap location for %s\n", nm);
+			return;
+		}
+
+		// try compare to determine if this is old disk from the same array.
+		// Must compare supers (match uuid), have a valid raid disk,
+		// and have a valid bitmap. Bitmap is required for re-add recovery.
 		if (st->ss->compare_super(st, st2) == 0 &&
-		    new_info.disk.raid_disk >= 0) {
+		    new_info.disk.raid_disk >= 0 &&
+			bitmap_info->bitmap_offset == 1) {
 
 			// re-add attempt: activate/in-sync/not-faulty
 			if ((new_info.disk.state & (1 << MD_DISK_ACTIVE)) &&
@@ -349,6 +359,8 @@ static void add_disk_to_container(struct supertype *st, struct mdinfo *sd)
 				 */
 				return;
 			}
+		} else {
+			dprintf("no re-add possible, superblock mismatch, no raid disk, or no bitmap\n");
 		}
 	}
 
@@ -417,7 +429,7 @@ static void manage_container(struct mdstat_ent *mdstat,
 				struct mdinfo *newd = xmalloc(sizeof(*newd));
 
 				*newd = *di;
-				add_disk_to_container(container, newd);
+				add_disk_to_container(container, newd, mdstat);
 			}
 		}
 		sysfs_free(mdi);

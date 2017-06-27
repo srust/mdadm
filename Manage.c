@@ -752,6 +752,13 @@ int attempt_re_add(int fd, int tfd, struct mddev_dev *dv,
 			// only allow re-add if a bitmap exists; otherwise we won't synchronize
 			// the new disk correctly
 			struct mdinfo *bitmap_info = sysfs_read(fd, NULL, GET_BITMAP_LOCATION);
+			if (!bitmap_info) {
+				pr_err("re-add failed for %s: sysfs_read failed\n",
+					   dv->devname);
+				close(container_fd);
+				tst->ss->free_super(tst);
+				return -1;
+			}
 			if (bitmap_info->bitmap_offset != 1) {
 				if (verbose >= 0)
 					pr_err("failed to re-add to external; no bitmap configured.\n");
