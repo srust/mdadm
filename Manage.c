@@ -754,8 +754,10 @@ int attempt_re_add(int fd, int tfd, struct mddev_dev *dv,
 			struct mdinfo *bitmap_info = sysfs_read(fd, NULL, GET_BITMAP_LOCATION);
 			if (bitmap_info->bitmap_offset != 1) {
 				if (verbose >= 0)
-					pr_err("failed to re-add to external; no bitmap configured.");
-				return -1;
+					pr_err("failed to re-add to external; no bitmap configured.\n");
+				close(container_fd);
+				// return success here: try normal add
+				return 0;
 			}
 			sra->array.level = LEVEL_CONTAINER;
 			mdi.disk = disc;
@@ -770,6 +772,7 @@ int attempt_re_add(int fd, int tfd, struct mddev_dev *dv,
 			ping_monitor(devnm);
 			if (verbose >= 0)
 				pr_err("re-added to external array %s\n", dv->devname);
+			close(container_fd);
 			return 1;
 		} else {
 			/* don't even try if disk is marked as faulty */
