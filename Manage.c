@@ -734,7 +734,7 @@ int attempt_re_add(int fd, int tfd, struct mddev_dev *dv,
 
 			container_fd = open_dev_excl(devnm);
 			if (container_fd < 0) {
-				pr_err("add failed for %s: could not get exclusive access to container\n",
+				pr_err("re-add failed for %s: could not get exclusive access to container\n",
 					   dv->devname);
 				tst->ss->free_super(tst);
 				return -1;
@@ -742,16 +742,25 @@ int attempt_re_add(int fd, int tfd, struct mddev_dev *dv,
 
 			sra = sysfs_read(container_fd, NULL, 0);
 			if (!sra) {
-				pr_err("add failed for %s: sysfs_read failed\n",
+				pr_err("re-add failed for %s: sysfs_read failed\n",
 					   dv->devname);
 				close(container_fd);
 				tst->ss->free_super(tst);
 				return -1;
 			}
+
+			// only allow re-add if a bitmap exists; otherwise we won't synchronize
+			// the new disk correctly
+			struct mdinfo *bitmap_info = sysfs_read(fd, NULL, GET_BITMAP_LOCATION);
+			if (bitmap_info->bitmap_offset != 1) {
+				if (verbose >= 0)
+					pr_err("failed to re-add to external; no bitmap configured.");
+				return -1;
+			}
 			sra->array.level = LEVEL_CONTAINER;
 			mdi.disk = disc;
 			mdi.recovery_start = 1;
-			pr_err("addingn back existing external disk\n");
+			pr_err("re-adding back existing external disk\n");
 			if (sysfs_add_disk(sra, &mdi, 0) != 0) {
 				pr_err("add new device to external metadata failed for %s\n", dv->devname);
 				close(container_fd);
