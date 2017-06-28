@@ -727,14 +727,69 @@ int attempt_re_add(int fd, int tfd, struct mddev_dev *dv,
 		}
 		if (tst->ss->external) {
 			struct mdinfo *sra;
-			int container_fd;
+			int container_fd, subarray_fd;
 			char devnm[32];
 
 			strcpy(devnm, fd2devnm(fd));
 
+			struct mdstat_ent *mdstat = mdstat_read(0, 0);
+			struct mdstat_ent *ent;
+
+			// look for container subarrays. Only support one subarray really.
+			for (ent = mdstat; ent; ent = ent->next) {
+				if (is_container_member(ent, devnm))
+					break;
+			}
+
+			if (!ent) {
+				pr_err("re-add failed for %s: could not find subarray for %s\n",
+					   dv->devname, devnm);
+				return -1;
+			}
+
+			subarray_fd = open_dev(ent->devnm);
+			if (subarray_fd < 0) {
+				pr_err("re-add failed for %s: could not open subarray %s\n",
+					   dv->devname, ent->devnm);
+				tst->ss->free_super(tst);
+				return -1;
+			}
+
+			sra = sysfs_read(subarray_fd, NULL, 0);
+			if (!sra) {
+				pr_err("re-add failed for %s: sysfs_read failed\n",
+					   dv->devname);
+				close(subarray_fd);
+				tst->ss->free_super(tst);
+				return -1;
+			}
+			free(sra);
+
+			// only allow re-add if a bitmap exists; otherwise we won't synchronize
+			// the new disk correctly
+			struct mdinfo *bitmap_info = sysfs_read(subarray_fd, NULL, GET_BITMAP_LOCATION);
+			if (!bitmap_info) {
+				pr_err("re-add failed for %s: sysfs_read failed\n",
+					   dv->devname);
+				close(subarray_fd);
+				tst->ss->free_super(tst);
+				return -1;
+			}
+			if (bitmap_info->bitmap_offset != 1) {
+				if (verbose >= 0)
+					pr_err("failed to re-add to external; no bitmap configured on subarray.\n");
+				free(bitmap_info);
+				close(subarray_fd);
+				// return success here: try normal add
+				return 0;
+			}
+			free(bitmap_info);
+			close(subarray_fd);
+			subarray_fd = -1;
+
 			container_fd = open_dev_excl(devnm);
 			if (container_fd < 0) {
-				pr_err("re-add failed for %s: could not get exclusive access to container\n",
+				pr_err("re-add failed for %s: could not get exclusive access for container\n",
 					   dv->devname);
 				tst->ss->free_super(tst);
 				return -1;
@@ -748,28 +803,10 @@ int attempt_re_add(int fd, int tfd, struct mddev_dev *dv,
 				tst->ss->free_super(tst);
 				return -1;
 			}
-
-			// only allow re-add if a bitmap exists; otherwise we won't synchronize
-			// the new disk correctly
-			struct mdinfo *bitmap_info = sysfs_read(fd, NULL, GET_BITMAP_LOCATION);
-			if (!bitmap_info) {
-				pr_err("re-add failed for %s: sysfs_read failed\n",
-					   dv->devname);
-				close(container_fd);
-				tst->ss->free_super(tst);
-				return -1;
-			}
-			if (bitmap_info->bitmap_offset != 1) {
-				if (verbose >= 0)
-					pr_err("failed to re-add to external; no bitmap configured.\n");
-				close(container_fd);
-				// return success here: try normal add
-				return 0;
-			}
 			sra->array.level = LEVEL_CONTAINER;
 			mdi.disk = disc;
 			mdi.recovery_start = 1;
-			pr_err("re-adding back existing external disk\n");
+			pr_err("re-adding back previous non-faulty disk\n");
 			if (sysfs_add_disk(sra, &mdi, 0) != 0) {
 				pr_err("add new device to external metadata failed for %s\n", dv->devname);
 				close(container_fd);
