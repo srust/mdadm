@@ -330,13 +330,22 @@ static void add_disk_to_container(struct supertype *st, struct mdinfo *sd,
 			return;
 		}
 
+		int super_ok  = 0;
+		int disk_ok   = 0;
+		int bitmap_ok = 0;
+
+
 		// try compare to determine if this is old disk from the same array.
 		// Must compare supers (match uuid), have a valid raid disk,
 		// and have a valid bitmap. Bitmap is required for re-add recovery.
-		if (st->ss->compare_super(st, st2) == 0 &&
-		    new_info.disk.raid_disk >= 0 &&
-			bitmap_info->bitmap_offset == 1) {
+		if (st->ss->compare_super(st, st2) == 0)
+			super_ok = 1;
+		if (new_info.disk.raid_disk >= 0)
+			disk_ok = 1;
+		if (bitmap_info->bitmap_offset == 1)
+			bitmap_ok = 1;
 
+		if (super_ok && disk_ok && bitmap_ok) {
 			// re-add attempt: activate/in-sync/not-faulty
 			if ((new_info.disk.state & (1 << MD_DISK_ACTIVE)) &&
 				(new_info.disk.state & (1 << MD_DISK_SYNC)) &&
@@ -360,7 +369,8 @@ static void add_disk_to_container(struct supertype *st, struct mdinfo *sd,
 				return;
 			}
 		} else {
-			dprintf("no re-add possible, superblock mismatch, no raid disk, or no bitmap\n");
+			dprintf("re-add not possible: [super: %s, disknum: %s, bitmap: %s]\n",
+					super_ok ? "OK" : "NO", disk_ok ? "OK" : "NO", bitmap_ok ? "OK" : "NO");
 		}
 	}
 
