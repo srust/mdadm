@@ -324,16 +324,32 @@ static void add_disk_to_container(struct supertype *st, struct mdinfo *sd,
 		st->ss->getinfo_super(st, &dsk_info, NULL);
 		st2->ss->getinfo_super(st2, &new_info, NULL);
 
-		struct mdinfo *bitmap_info = sysfs_read(-1, mdstat->devnm, GET_BITMAP_LOCATION);
+		// check bitmap location for subarray
+		struct mdstat_ent *ents = mdstat_read(1, 0);
+		struct mdstat_ent *ent;
+
+		// look for container subarrays. Only support one subarray really.
+		for (ent = ents; ent; ent = ent->next) {
+			if (is_container_member(ent, mdstat->devnm))
+				break;
+		}
+
+		if (!ent) {
+			dprintf("error: could not find subarray for %s in mdstat\n", mdstat->devnm);
+			free_mdstat(ents);
+			return;
+		}
+
+		struct mdinfo *bitmap_info = sysfs_read(-1, ent->devnm, GET_BITMAP_LOCATION);
 		if (!bitmap_info) {
 			dprintf("could not read bitmap location for %s\n", nm);
+			free_mdstat(ents);
 			return;
 		}
 
 		int super_ok  = 0;
 		int disk_ok   = 0;
 		int bitmap_ok = 0;
-
 
 		// try compare to determine if this is old disk from the same array.
 		// Must compare supers (match uuid), have a valid raid disk,
@@ -352,7 +368,7 @@ static void add_disk_to_container(struct supertype *st, struct mdinfo *sd,
 				!(new_info.disk.state & (1 << MD_DISK_FAULTY)) &&
 				new_info.events <= dsk_info.events) {
 
-				dprintf("attempting re-add for %s\n", nm);
+				dprintf("re-add OK for %s with %s\n", nm, ent->devnm);
 
 				// Setting raid_disk and state make this a re-add
 				dk.number    = new_info.disk.number;
@@ -366,12 +382,15 @@ static void add_disk_to_container(struct supertype *st, struct mdinfo *sd,
 				 * mdadm will incorporate any parts into
 				 * active arrays.
 				 */
+				free_mdstat(ents);
 				return;
 			}
 		} else {
-			dprintf("re-add not possible: [super: %s, disknum: %s, bitmap: %s]\n",
-					super_ok ? "OK" : "NO", disk_ok ? "OK" : "NO", bitmap_ok ? "OK" : "NO");
+			dprintf("re-add not possible: [devnm: %s, super: %s, disknum: %s, bitmap: %s, bitmap_offset: %ld]\n",
+					ent->devnm, super_ok ? "OK" : "NO", disk_ok ? "OK" : "NO", bitmap_ok ? "OK" : "NO",
+					bitmap_info->bitmap_offset);
 		}
+		free_mdstat(ents);
 	}
 
 	st2->ss->free_super(st2);

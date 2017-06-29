@@ -744,6 +744,7 @@ int attempt_re_add(int fd, int tfd, struct mddev_dev *dv,
 			if (!ent) {
 				pr_err("re-add failed for %s: could not find subarray for %s\n",
 					   dv->devname, devnm);
+				free_mdstat(mdstat);
 				return -1;
 			}
 
@@ -752,8 +753,10 @@ int attempt_re_add(int fd, int tfd, struct mddev_dev *dv,
 				pr_err("re-add failed for %s: could not open subarray %s\n",
 					   dv->devname, ent->devnm);
 				tst->ss->free_super(tst);
+				free_mdstat(mdstat);
 				return -1;
 			}
+			free_mdstat(mdstat);
 
 			sra = sysfs_read(subarray_fd, NULL, 0);
 			if (!sra) {
