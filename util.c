@@ -631,7 +631,6 @@ char *__fname_from_uuid(int id[4], int swap, char *buf, char sep)
 		}
 	}
 	return buf;
-
 }
 
 char *fname_from_uuid(struct supertype *st, struct mdinfo *info, char *buf, char sep)
@@ -1805,6 +1804,14 @@ int set_array_info(int mdfd, struct supertype *st, struct mdinfo *info)
 	int rv;
 
 #ifndef MDASSEMBLE
+	if (st->ss->external && st->container_devnm[0]) {
+		mdu_array_info_t inf;
+		memset(&inf, 0, sizeof(inf));
+		inf.raid_disks = 1;
+		rv = ioctl(mdfd, SET_ARRAY_INFO, &inf);
+		if (rv < 0)
+			return rv;
+	}
 	if (st->ss->external)
 		rv = sysfs_set_array(info, vers);
 	else

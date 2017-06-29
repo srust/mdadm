@@ -533,6 +533,20 @@ static void manage_member(struct mdstat_ent *mdstat,
 		// MORE
 	}
 
+	int dfd = open_dev(mdstat->devnm);
+	if (dfd >= 0) {
+		dprintf("setting bitmap\n");
+		mdu_array_info_t info;
+		int rv = ioctl(dfd, GET_ARRAY_INFO, &info);
+		if (!rv) {
+			info.state |= (1 << MD_SB_BITMAP_PRESENT);
+			rv = ioctl(dfd, SET_ARRAY_INFO, &info);
+		}
+		if (rv < 0)
+			dprintf("failed to set BITMAP");
+		close(dfd);
+	}
+
 	if (sysfs_get_ll(&a->info, NULL, "component_size", &component_size) >= 0)
 		a->info.component_size = component_size << 1;
 

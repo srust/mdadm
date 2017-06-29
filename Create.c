@@ -769,18 +769,19 @@ int Create(struct supertype *st, char *mddev,
 			pr_err("internal bitmaps not supported by this kernel.\n");
 			goto abort_locked;
 		}
-		if (!st->ss->add_internal_bitmap) {
-			pr_err("internal bitmaps not supported with %s metadata\n",
-				st->ss->name);
-			goto abort_locked;
-		}
-		if (st->ss->add_internal_bitmap(st, &s->bitmap_chunk,
-						c->delay, s->write_behind,
-						bitmapsize, 1, major_num)) {
-			pr_err("Given bitmap chunk size not supported.\n");
-			goto abort_locked;
+		if (st->ss->add_internal_bitmap) {
+			if (st->ss->add_internal_bitmap(st, &s->bitmap_chunk,
+							c->delay, s->write_behind,
+							bitmapsize, 1, major_num)) {
+				pr_err("Given bitmap chunk size not supported.\n");
+				goto abort_locked;
+			}
 		}
 		s->bitmap_file = NULL;
+
+		// set bitmap present
+		if (st->ss->external && st->container_devnm[0])
+			info.array.state |= (1<<MD_SB_BITMAP_PRESENT);
 	}
 
 	sysfs_init(&info, mdfd, NULL);
