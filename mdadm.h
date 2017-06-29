@@ -235,7 +235,7 @@ struct dlm_lksb {
 
 #define ARRAY_SIZE(x) (sizeof(x)/sizeof(x[0]))
 
-extern const char Name[];
+extern char Name[];
 
 struct md_bb_entry {
 	unsigned long long sector;

@@ -2916,6 +2916,9 @@ static int add_to_super_ddf(struct supertype *st,
 	if (dk->raid_disk >= 0) {
 		dd->readd = 1;
 		dd->state = dk->state;
+	} else {
+		dd->readd = 0;
+		dd->state = 0;
 	}
 
 	dd->disk.magic = DDF_PHYS_DATA_MAGIC;

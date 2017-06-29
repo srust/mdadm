@@ -38,7 +38,7 @@ static int misc_list(struct mddev_dev *devlist,
 		     struct mddev_ident *ident,
 		     char *dump_directory,
 		     struct supertype *ss, struct context *c);
-const char Name[] = "mdadm";
+char Name[] = "mdadm";
 
 int main(int argc, char *argv[])
 {

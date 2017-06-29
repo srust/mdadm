@@ -67,7 +67,7 @@
 #include	"mdadm.h"
 #include	"mdmon.h"
 
-char const Name[256] = "mdmon";
+char Name[256] = "mdmon";
 
 struct active_array *discard_this;
 struct active_array *pending_discard;
@@ -392,7 +392,7 @@ int main(int argc, char *argv[])
 		exit(1);
 	}
 
-	//snprintf((char *)Name, sizeof Name, container_name);
+	snprintf((char *)Name, sizeof Name, "mdmon-%s", container_name);
 	return mdmon(devnm, dofork && do_fork(), takeover);
 }
 
