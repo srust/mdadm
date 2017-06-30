@@ -3078,19 +3078,27 @@ static int __write_ddf_structure(struct dl *d, struct ddf_super *ddf, __u8 type)
 	header->crc = calc_crc(header, 512);
 
 	lseek64(fd, sector<<9, 0);
-	if (write(fd, header, 512) < 0)
+	if (write(fd, header, 512) < 0) {
+        dprintf("header write failed\n");
 		goto out;
+    }
 
 	ddf->controller.crc = calc_crc(&ddf->controller, 512);
-	if (write(fd, &ddf->controller, 512) < 0)
+	if (write(fd, &ddf->controller, 512) < 0) {
+        dprintf("controller write failed\n");
 		goto out;
+    }
 
 	ddf->phys->crc = calc_crc(ddf->phys, ddf->pdsize);
-	if (write(fd, ddf->phys, ddf->pdsize) < 0)
+	if (write(fd, ddf->phys, ddf->pdsize) < 0) {
+        dprintf("phys write failed\n");
 		goto out;
+    }
 	ddf->virt->crc = calc_crc(ddf->virt, ddf->vdsize);
-	if (write(fd, ddf->virt, ddf->vdsize) < 0)
+	if (write(fd, ddf->virt, ddf->vdsize) < 0) {
+        dprintf("virt write failed\n");
 		goto out;
+    }
 
 	/* Now write lots of config records. */
 	n_config = ddf->max_part;
@@ -3129,12 +3137,16 @@ static int __write_ddf_structure(struct dl *d, struct ddf_super *ddf, __u8 type)
 		} else
 			memset(conf + i*conf_size, 0xff, conf_size);
 	}
-	if (write(fd, conf, buf_size) != buf_size)
+	if (write(fd, conf, buf_size) != buf_size) {
+        dprintf("conf write failed\n");
 		goto out;
+    }
 
 	d->disk.crc = calc_crc(&d->disk, 512);
-	if (write(fd, &d->disk, 512) < 0)
+	if (write(fd, &d->disk, 512) < 0) {
+        dprintf("disk section write failed\n");
 		goto out;
+    }
 
 	ret = 1;
 out:
@@ -3142,8 +3154,10 @@ out:
 	header->crc = calc_crc(header, 512);
 
 	lseek64(fd, sector<<9, 0);
-	if (write(fd, header, 512) < 0)
+	if (write(fd, header, 512) < 0) {
+        dprintf("out: header write failed\n");
 		ret = 0;
+    }
 
 	return ret;
 }
@@ -3188,15 +3202,21 @@ static int _write_super_to_disk(struct ddf_super *ddf, struct dl *d)
 	ddf->anchor.seq = cpu_to_be32(0xFFFFFFFF); /* no sequencing in anchor */
 	ddf->anchor.crc = calc_crc(&ddf->anchor, 512);
 
-	if (!__write_ddf_structure(d, ddf, DDF_HEADER_PRIMARY))
+	if (!__write_ddf_structure(d, ddf, DDF_HEADER_PRIMARY)) {
+        dprintf("primary header write failed\n");
 		return 0;
+    }
 
-	if (!__write_ddf_structure(d, ddf, DDF_HEADER_SECONDARY))
+	if (!__write_ddf_structure(d, ddf, DDF_HEADER_SECONDARY)) {
+        dprintf("secondary header write failed\n");
 		return 0;
+    }
 
 	lseek64(fd, (size-1)*512, SEEK_SET);
-	if (write(fd, &ddf->anchor, 512) < 0)
+	if (write(fd, &ddf->anchor, 512) < 0) {
+        dprintf("anchor write failed\n");
 		return 0;
+    }
 
 	return 1;
 }
@@ -3218,6 +3238,9 @@ static int __write_init_super_ddf(struct supertype *st)
 		attempts++;
 		successes += _write_super_to_disk(ddf, d);
 	}
+
+	dprintf("ddf: sync_metadata attempts:%d successes:%d\n",
+            attempts, successes);
 
 	return attempts != successes;
 }
