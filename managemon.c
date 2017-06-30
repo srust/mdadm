@@ -275,11 +275,31 @@ static void remove_disk_from_container(struct supertype *st, struct mdinfo *sd)
 		.raid_disk = -1,
 		.state = 0,
 	};
+	struct active_array *a;
+
 	dprintf("remove %d:%d from container\n",
 		sd->disk.major, sd->disk.minor);
 
+	// Blockbridge Partition Fencing
+	//
+	// Must be run prior to synchronizing the metadata.
+	//
+	// Rather than take action persistently when there aren't
+	// enough devices in the array, exit mdmon immediately.
+	// Monitoring processes will take action as necessary.
+	for (a = st->arrays ; a; a=a->next) {
+		if (probe_enabled && a->container->ss->probe_devices) {
+			if (!a->container->ss->probe_devices(a)) {
+				fprintf(stderr, "monitor: %s array partitioned;"
+					"exiting!\n", __FUNCTION__);
+				exit(1);
+			}
+		}
+	}
+
 	st->update_tail = &update;
 	st->ss->remove_from_super(st, &dk);
+
 	/* FIXME this write_init_super shouldn't be here.
 	 * We have it after add_to_super to write to new device,
 	 * but with 'remove' we don't ant to write to that device!
@@ -305,6 +325,7 @@ static void add_disk_to_container(struct supertype *st, struct mdinfo *sd,
 		.raid_disk = -1,
 		.state = 0,
 	};
+	struct active_array *a;
 
 	dprintf("add %d:%d to container\n", sd->disk.major, sd->disk.minor);
 
@@ -391,6 +412,24 @@ static void add_disk_to_container(struct supertype *st, struct mdinfo *sd,
 					bitmap_info->bitmap_offset);
 		}
 		free_mdstat(ents);
+	}
+
+
+	// Blockbridge Partition Fencing
+	//
+	// Must be run prior to synchronizing the metadata.
+	//
+	// Rather than take action persistently when there aren't
+	// enough devices in the array, exit mdmon immediately.
+	// Monitoring processes will take action as necessary.
+	for (a = st->arrays ; a; a=a->next) {
+		if (probe_enabled && a->container->ss->probe_devices) {
+			if (!a->container->ss->probe_devices(a)) {
+				fprintf(stderr, "monitor: %s array partitioned;"
+					"exiting!\n", __FUNCTION__);
+				exit(1);
+			}
+		}
 	}
 
 	st2->ss->free_super(st2);

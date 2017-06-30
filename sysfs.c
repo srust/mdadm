@@ -42,6 +42,7 @@ int load_sys(char *path, char *buf, int len)
 	buf[n] = 0;
 	if (n && buf[n-1] == '\n')
 		buf[n-1] = 0;
+	dprintf("%s: %s\n", path, buf);
 	return 0;
 }
 
@@ -425,6 +426,7 @@ int sysfs_set_str(struct mdinfo *sra, struct mdinfo *dev,
 	fd = open(fname, O_WRONLY);
 	if (fd < 0)
 		return -1;
+	dprintf("%s: %s\n", fname, val);
 	n = write(fd, val, strlen(val));
 	close(fd);
 	if (n != strlen(val)) {
@@ -462,6 +464,7 @@ int sysfs_uevent(struct mdinfo *sra, char *event)
 	fd = open(fname, O_WRONLY);
 	if (fd < 0)
 		return -1;
+	dprintf("%s: %s\n", fname, event);
 	n = write(fd, event, strlen(event));
 	close(fd);
 	if (n != (int)strlen(event)) {
@@ -594,6 +597,8 @@ int sysfs_get_str(struct mdinfo *sra, struct mdinfo *dev,
 		return -1;
 	n = sysfs_fd_get_str(fd, val, size);
 	close(fd);
+	if (n > 0)
+		dprintf("%s: %s\n", name, val);
 	return n;
 }
 

@@ -412,7 +412,6 @@ static int read_and_act(struct active_array *a, fd_set *fds)
 	int ret = 0;
 	int count = 0;
 	struct timeval tv;
-	int needs_probe = 0;
 
 	a->next_state = bad_word;
 	a->next_action = bad_action;
@@ -439,12 +438,10 @@ static int read_and_act(struct active_array *a, fd_set *fds)
 		}
 
 		if (mdi->curr_state & DS_WRITE_ERROR) {
-			needs_probe++;
 			dprintf("curr_state: WRITE_ERROR: disk %d\n",
 				mdi->disk.raid_disk);
 		}
 		if (mdi->curr_state & DS_FAULTY) {
-			needs_probe++;
 			dprintf("curr_state: FAULTY: disk %d\n",
 				mdi->disk.raid_disk);
 		}
@@ -637,7 +634,7 @@ static int read_and_act(struct active_array *a, fd_set *fds)
 	// Rather than take action persistently when there aren't
 	// enough devices in the array, exit mdmon immediately.
 	// Monitoring processes will take action as necessary.
-	if (needs_probe && probe_enabled && a->container->ss->probe_devices) {
+	if (probe_enabled && a->container->ss->probe_devices) {
 		if (!a->container->ss->probe_devices(a)) {
 			fprintf(stderr, "monitor: array partitioned; exiting!\n");
 			exit(1);

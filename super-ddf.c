@@ -4307,12 +4307,10 @@ static int get_bvd_state(const struct ddf_super *ddf,
 		if (!find_index_in_bvd(ddf, vc, i, &n_bvd))
 			continue;
 		pd = find_phys(ddf, vc->phys_refnum[n_bvd]);
-		dprintf("i:%d n_bvd:%u phys_refnum:%u pd:%d\n", i, n_bvd,
+		dprintf("i:%d n_bvd:%u phys_refnum:(%x) pd:%d\n", i, n_bvd,
 			be32_to_cpu(vc->phys_refnum[n_bvd]), pd);
 		if (pd < 0)
 			continue;
-		dprintf("i:%d refnum_indirect:%u\n", i,
-			be32_to_cpu(ddf->phys->entries[pd].refnum));
 
 		if (probe) {
 			if (!bvd_probe_device_online(ddf, pd)) {
@@ -4584,11 +4582,10 @@ static int ddf_probe_device(struct ddf_super *ddf, struct dl *d)
 	int fd = d->fd;
 	unsigned state = be16_to_cpu(ddf->phys->entries[d->pdnum].state);
 
-	dprintf("fd:%d pdnum:%d raiddisk:%d refnum:%u "
-		"refnum_indirect:%u state:%u %d:%d\n",
+	dprintf("fd:%d pdnum:%d raiddisk:%d refnum:(%x) "
+		"state:%u %d:%d\n",
 		d->fd, d->pdnum, d->raiddisk,
 		be32_to_cpu(d->disk.refnum),
-		be32_to_cpu(ddf->phys->entries[d->pdnum].refnum),
 		state, d->major, d->minor);
 
 	if ((state & (DDF_Failed|DDF_Rebuilding|DDF_Missing))) {

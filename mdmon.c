@@ -409,7 +409,7 @@ static int mdmon(char *devnm, int must_fork, int takeover)
 	pid_t victim = -1;
 	int victim_sock = -1;
 
-	dprintf("starting mdmon for %s\n", devnm);
+	dprintf("starting mdmon (blockbridge) for %s\n", devnm);
 
 	mdfd = open_dev(devnm);
 	if (mdfd < 0) {
