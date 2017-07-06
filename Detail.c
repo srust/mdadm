@@ -235,6 +235,8 @@ int Detail(char *dev, struct context *c)
 			printf("MD_CONTAINER=%s\n", container);
 			printf("MD_MEMBER=%s\n", member);
 			printf("MD_NAME=%s\n", info->name);
+			printf("MD_CTIME=%d\n", info->array.ctime);
+			printf("MD_MTIME=%d\n", info->array.utime);
 		} else {
 			if (sra && sra->array.major_version < 0)
 				printf("MD_METADATA=%s\n", sra->text_version);
