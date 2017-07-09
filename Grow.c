@@ -1775,13 +1775,13 @@ int Grow_reshape(char *devname, int fd,
 			if (sizeinfo) {
 				unsigned long long new_size =
 					sizeinfo->custom_array_size/2;
-				int data_disks = get_data_disks(
+				int data_disks_x10 = get_data_disks_x10(
 						sizeinfo->array.level,
 						sizeinfo->array.layout,
 						sizeinfo->array.raid_disks);
-				new_size /= data_disks;
+				new_size = (new_size * 10) / data_disks_x10;
 				dprintf("Metadata size correction from %llu to %llu (%llu)\n", orig_size, new_size,
-					new_size * data_disks);
+					(new_size * data_disks_x10) / 10);
 				s->size = new_size;
 				sysfs_free(sizeinfo);
 			}
@@ -2169,9 +2169,10 @@ static int verify_reshape_position(struct mdinfo *info, int level)
 
 		dprintf("Read sync_max sysfs entry is: %s\n", buf);
 		if (!(ep == buf || (*ep != 0 && *ep != '\n' && *ep != ' '))) {
-			position *= get_data_disks(level,
+			position *= get_data_disks_x10(level,
 						   info->new_layout,
 						   info->array.raid_disks);
+			position /= 10;
 			if (info->reshape_progress < position) {
 				dprintf("Corrected reshape progress (%llu) to md position (%llu)\n",
 					info->reshape_progress, position);

@@ -1457,7 +1457,7 @@ extern unsigned long long get_component_size(int fd);
 extern void remove_partitions(int fd);
 extern int test_partition(int fd);
 extern int test_partition_from_id(dev_t id);
-extern int get_data_disks(int level, int layout, int raid_disks);
+extern int get_data_disks_x10(int level, int layout, int raid_disks);
 extern unsigned long long calc_array_size(int level, int raid_disks, int layout,
 				   int chunksize, unsigned long long devsize);
 extern int flush_metadata_updates(struct supertype *st);

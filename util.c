@@ -910,27 +910,27 @@ unsigned long long calc_array_size(int level, int raid_disks, int layout,
 	if (level == 1)
 		return devsize;
 	devsize &= ~(unsigned long long)((chunksize>>9)-1);
-	return get_data_disks(level, layout, raid_disks) * devsize;
+	return (get_data_disks_x10(level, layout, raid_disks) * devsize) / 10;
 }
 
-int get_data_disks(int level, int layout, int raid_disks)
+int get_data_disks_x10(int level, int layout, int raid_disks)
 {
-	int data_disks = 0;
+	int data_disks_x10 = 0;
 	switch (level) {
-	case 0: data_disks = raid_disks;
+	case 0: data_disks_x10 = 10 * raid_disks;
 		break;
-	case 1: data_disks = 1;
+	case 1: data_disks_x10 = 10 * 1;
 		break;
 	case 4:
-	case 5: data_disks = raid_disks - 1;
+	case 5: data_disks_x10 = 10 * (raid_disks - 1);
 		break;
-	case 6: data_disks = raid_disks - 2;
+	case 6: data_disks_x10 = 10 * (raid_disks - 2);
 		break;
-	case 10: data_disks = raid_disks / (layout & 255) / ((layout>>8)&255);
+	case 10: data_disks_x10 = (10 * raid_disks) / (layout & 255) / ((layout>>8)&255);
 		break;
 	}
 
-	return data_disks;
+	return data_disks_x10;
 }
 
 dev_t devnm2devid(char *devnm)
