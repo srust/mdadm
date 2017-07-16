@@ -383,12 +383,6 @@ int Grow_addbitmap(char *devname, int fd, struct context *c, struct shape *s)
 			array.major_version, array.minor_version);
 		return 1;
 	}
-	if (subarray) {
-		pr_err("Cannot add bitmaps to sub-arrays yet\n");
-		free(subarray);
-		free(st);
-		return 1;
-	}
 	if (strcmp(s->bitmap_file, "internal") == 0 ||
 	    strcmp(s->bitmap_file, "clustered") == 0) {
 		int rv;
