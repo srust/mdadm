@@ -1687,6 +1687,21 @@ static void export_examine_super_ddf(struct supertype *st)
 	printf("MD_UUID=%s\n", nbuf+5);
 	printf("MD_DEVICES=%u\n",
 		be16_to_cpu(((struct ddf_super *)st->sb)->phys->used_pdes));
+
+	struct ddf_super *sb = st->sb;
+	unsigned int i;
+	for (i = 0; i < be16_to_cpu(sb->virt->max_vdes); i++) {
+		struct virtual_entry *ve = &sb->virt->entries[i];
+		if (all_ff(ve->guid))
+			continue;
+
+		if (info.name[0] == '\0')
+			strncpy(info.name, ve->name, sizeof(info.name));
+	}
+
+	if (info.name[0] != '\0')
+		printf("MD_NAME=%s\n", info.name);
+
 }
 
 static int copy_metadata_ddf(struct supertype *st, int from, int to)
