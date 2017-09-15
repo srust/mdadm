@@ -352,7 +352,8 @@ struct vd_config {
 	__u8	bg_rate;
 	__u8	pad2[3];
 	__u8	pad3[52];
-	__u8	pad4[192];
+	__u8	pad4[176];
+	__u8    uuid[16]; /* bb: store an MD UUID here */
 	__u8	v0[32];	/* reserved- 0xff */
 	__u8	v1[32];	/* reserved- 0xff */
 	__u8	v2[16];	/* reserved- 0xff */
@@ -532,6 +533,8 @@ static unsigned int get_pd_index_from_refnum(const struct vcl *vc,
 					     const struct vd_config **bvd,
 					     unsigned int *idx);
 static void getinfo_super_ddf(struct supertype *st, struct mdinfo *info, char *map);
+static void uuid_of_ddf_subarray(const struct ddf_super *ddf,
+				 unsigned int vcnum, int uuid[4]);
 static void uuid_from_ddf_guid(const char *guid, int uuid[4]);
 static void uuid_from_super_ddf(struct supertype *st, int uuid[4]);
 static void _ddf_array_name(char *name, const struct ddf_super *ddf, int i);
@@ -1128,9 +1131,10 @@ static int load_ddf_local(int fd, struct ddf_super *super,
 			memcpy(dl->spare, vd, super->conf_rec_len*512);
 			continue;
 		}
-		if (!be32_eq(vd->magic, DDF_VD_CONF_MAGIC))
+		if (!be32_eq(vd->magic, DDF_VD_CONF_MAGIC)) {
 			/* Must be vendor-unique - I cannot handle those */
 			continue;
+		}
 
 		for (vcl = super->conflist; vcl; vcl = vcl->next) {
 			if (memcmp(vcl->conf.guid,
@@ -1440,12 +1444,16 @@ static void examine_vd(int n, struct ddf_super *sb, char *guid)
 
 	for (vcl = sb->conflist ; vcl ; vcl = vcl->next) {
 		unsigned int i;
+		char nbuf[64];
 		struct vd_config *vc = &vcl->conf;
 
 		if (!be32_eq(calc_crc(vc, crl*512), vc->crc))
 			continue;
 		if (memcmp(vc->guid, guid, DDF_GUID_LEN) != 0)
 			continue;
+
+		printf("   Array UUID[%d] : %s\n", n,
+               uuid_to_str((void *)vc->uuid, 0, nbuf, ':'));
 
 		/* Ok, we know about this VD, let's give more details */
 		printf(" Raid Devices[%d] : %d (", n,
@@ -1659,20 +1667,16 @@ static void brief_examine_subarrays_ddf(struct supertype *st, int verbose)
 
 	for (i = 0; i < be16_to_cpu(ddf->virt->max_vdes); i++) {
 		struct virtual_entry *ve = &ddf->virt->entries[i];
-		struct vcl vcl;
 		char nbuf1[64];
 		char namebuf[17];
 		if (all_ff(ve->guid))
 			continue;
-		memcpy(vcl.conf.guid, ve->guid, DDF_GUID_LEN);
-		ddf->currentconf =&vcl;
-		vcl.vcnum = i;
-		uuid_from_super_ddf(st, info.uuid);
-		fname_from_uuid(st, &info, nbuf1, ':');
+		uuid_of_ddf_subarray(ddf, i, info.uuid);
+		uuid_to_str(info.uuid, 0, nbuf1, ':');
 		_ddf_array_name(namebuf, ddf, i);
 		printf("ARRAY%s%s container=%s member=%d UUID=%s\n",
 		       namebuf[0] == '\0' ? "" : " /dev/md/", namebuf,
-		       nbuf+5, i, nbuf1+5);
+		       nbuf+5, i, nbuf1);
 	}
 }
 
@@ -1794,13 +1798,36 @@ static int volume_id_is_reliable(const struct ddf_super *ddf)
 	return 1;
 }
 
+static int uuid_of_ddf_subarray_isset(int uuid[4])
+{
+	int i = 0;
+	for (i = 0; i < 16; i += 4) {
+		if (uuid[i] != -1)
+			return 1;
+	}
+
+	return 0;
+}
+
 static void uuid_of_ddf_subarray(const struct ddf_super *ddf,
 				 unsigned int vcnum, int uuid[4])
 {
 	char buf[DDF_GUID_LEN+18], sha[20], *p;
 	struct sha1_ctx ctx;
 	if (volume_id_is_reliable(ddf)) {
-		uuid_from_ddf_guid(ddf->virt->entries[vcnum].guid, uuid);
+		struct vcl *vcl;
+		for (vcl = ddf->conflist; vcl; vcl = vcl->next) {
+			if (vcl->vcnum == vcnum)
+				break;
+		}
+
+		if (!vcl)
+			vcl = ddf->currentconf;
+		if (vcl && uuid_of_ddf_subarray_isset((void *)vcl->conf.uuid)) {
+			copy_uuid(uuid, (void *)vcl->conf.uuid, 0);
+		} else {
+			uuid_from_ddf_guid(ddf->virt->entries[vcnum].guid, uuid);
+		}
 		return;
 	}
 	/*
@@ -2743,6 +2770,11 @@ static int init_super_ddf_bvd(struct supertype *st,
 	memset(vc->v3, 0xff, 16);
 	memset(vc->vendor, 0xff, 32);
 
+	if (uuid)
+		copy_uuid(vc->uuid, uuid, 0);
+	else
+		random_uuid(vc->uuid);
+
 	memset(vc->phys_refnum, 0xff, 4*ddf->mppe);
 	memset(vc->phys_refnum+ddf->mppe, 0x00, 8*ddf->mppe);
 
@@ -3109,6 +3141,7 @@ static int __write_ddf_structure(struct dl *d, struct ddf_super *ddf, __u8 type)
         dprintf("phys write failed\n");
 		goto out;
     }
+
 	ddf->virt->crc = calc_crc(ddf->virt, ddf->vdsize);
 	if (write(fd, ddf->virt, ddf->vdsize) < 0) {
         dprintf("virt write failed\n");
@@ -3143,14 +3176,17 @@ static int __write_ddf_structure(struct dl *d, struct ddf_super *ddf, __u8 type)
 					&dummy);
 		}
 		if (vdc) {
-			dprintf("writing conf record %i on disk %08x for %s/%u (%d bytes)\n",
-                    i, be32_to_cpu(d->disk.refnum),
-                    guid_str(vdc->guid),
-                    vdc->sec_elmnt_seq, buf_size);
+			char nbuf[64];
+			dprintf("writing conf record %i on disk %08x for %s (%s) %u (%d bytes)\n",
+					i, be32_to_cpu(d->disk.refnum),
+					guid_str(vdc->guid),
+					__fname_from_uuid((void *)vdc->uuid, 0, nbuf, ':'),
+					vdc->sec_elmnt_seq, conf_size);
 			vdc->crc = calc_crc(vdc, conf_size);
 			memcpy(conf + i*conf_size, vdc, conf_size);
-		} else
+		} else {
 			memset(conf + i*conf_size, 0xff, conf_size);
+		}
 	}
 	if (write(fd, conf, buf_size) != buf_size) {
         dprintf("conf write failed\n");

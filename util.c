@@ -614,13 +614,11 @@ void copy_uuid(void *a, int b[4], int swapuuid)
 		memcpy(a, b, 16);
 }
 
-char *__fname_from_uuid(int id[4], int swap, char *buf, char sep)
+char *uuid_to_str(int id[4], int swap, char *buf, char sep)
 {
 	int i, j;
 	char uuid[16];
 	char *c = buf;
-	strcpy(c, "UUID-");
-	c += strlen(c);
 	copy_uuid(uuid, id, swap);
 	for (i = 0; i < 4; i++) {
 		if (i)
@@ -631,7 +629,15 @@ char *__fname_from_uuid(int id[4], int swap, char *buf, char sep)
 		}
 	}
 	return buf;
+}
 
+char *__fname_from_uuid(int id[4], int swap, char *buf, char sep)
+{
+	char *c = buf;
+	strcpy(c, "UUID-");
+	c += strlen(c);
+	uuid_to_str(id, swap, c, sep);
+	return buf;
 }
 
 char *fname_from_uuid(struct supertype *st, struct mdinfo *info, char *buf, char sep)
