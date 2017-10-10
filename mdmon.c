@@ -66,6 +66,7 @@
 
 #include	"mdadm.h"
 #include	"mdmon.h"
+#include	"mdvote.h"
 
 char Name[256] = "mdmon";
 
@@ -302,6 +303,8 @@ int main(int argc, char *argv[])
 		{"no-probe", 0, NULL, 'N'},
 		{NULL, 0, NULL, 0}
 	};
+
+	mdvote_init();
 
 	if (in_initrd()) {
 		/*

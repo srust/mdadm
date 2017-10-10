@@ -72,6 +72,7 @@ int main(int argc, char *argv[])
 	 */
 	struct context c = {
 		.require_homehost = 1,
+		.mdvote = 1,
 	};
 	struct shape s = {
 		.journaldisks	= 0,
@@ -671,6 +672,11 @@ int main(int argc, char *argv[])
 						    * initrd phase */
 		case O(INCREMENTAL, FreezeReshape):
 			c.freeze_reshape = 1;
+			continue;
+		case O(ASSEMBLE, NoMdVote):
+		case O(INCREMENTAL, NoMdVote):
+		case O(CREATE, NoMdVote):
+			c.mdvote = 0;
 			continue;
 		case O(CREATE,'u'): /* uuid of array */
 		case O(ASSEMBLE,'u'): /* uuid of array */

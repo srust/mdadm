@@ -427,6 +427,7 @@ enum special_options {
 	ClusterName,
 	ClusterConfirm,
 	WriteJournal,
+	NoMdVote,
 };
 
 enum prefix_standard {
@@ -513,6 +514,7 @@ struct context {
 	char	*action;
 	int	nodes;
 	char	*homecluster;
+	int mdvote;
 };
 
 struct shape {
@@ -866,7 +868,7 @@ extern struct superswitch {
 	int (*init_super)(struct supertype *st, mdu_array_info_t *info,
 			  unsigned long long size, char *name,
 			  char *homehost, int *uuid,
-			  unsigned long long data_offset);
+			  unsigned long long data_offset, int mdvote);
 
 	/* update the metadata to include new device, either at create or
 	 * when hot-adding a spare.
@@ -1020,7 +1022,7 @@ extern struct superswitch {
 	 * not in fact changed.
 	 */
 	void (*set_disk)(struct active_array *a, int n, int state);
-	void (*sync_metadata)(struct supertype *st);
+	int (*sync_metadata)(struct supertype *st);
 	void (*process_update)(struct supertype *st,
 			       struct metadata_update *update);
 	/* Prepare updates allocates extra memory that might be
@@ -1073,6 +1075,18 @@ extern struct superswitch {
 
 	/* return nonzero if enough devices are readable */
 	int (*probe_devices)(struct active_array *a);
+
+    /* return external minimum assembly sequence number */
+	int64_t (*get_assembly_seq)(struct supertype *st);
+
+    /* return external minimum member sequence number */
+	int64_t (*get_member_seq)(struct supertype *st);
+
+    /* save the external minimum assembly sequence number */
+	int (*put_assembly_seq)(struct supertype *st, int64_t seq);
+
+    /* save the external minimum member sequence number */
+	int (*put_member_seq)(struct supertype *st, int64_t seq);
 
 	int swapuuid; /* true if uuid is bigending rather than hostendian */
 	int external;

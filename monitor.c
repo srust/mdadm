@@ -419,11 +419,11 @@ static int read_and_act(struct active_array *a, fd_set *fds)
 	a->curr_state = read_state(a->info.state_fd);
 	a->curr_action = read_action(a->action_fd);
 
-    /*
-     * In "clear" state, resync_start may wrongly be set to "0"
-     * when the kernel called md_clean but didn't remove the
-     * sysfs attributes yet
-     */
+	/*
+	 * In "clear" state, resync_start may wrongly be set to "0"
+	 * when the kernel called md_clean but didn't remove the
+	 * sysfs attributes yet
+	 */
 	if (a->curr_state != clear)
 		read_resync_start(a->resync_start_fd, &a->info.resync_start);
 
@@ -562,19 +562,19 @@ static int read_and_act(struct active_array *a, fd_set *fds)
 	 */
 	for (mdi = a->info.devs ; mdi ; mdi = mdi->next) {
 		if (mdi->curr_state & DS_BLOCKED) {
-            dprintf("curr_state: DS_BLOCKED: disk %d\n",
-                    mdi->disk.raid_disk);
-        }
+			dprintf("curr_state: DS_BLOCKED: disk %d\n",
+				mdi->disk.raid_disk);
+		}
 		if (mdi->curr_state & DS_FAULTY) {
-            dprintf("curr_state: FAULTY disk: %d\n", mdi->disk.number);
+			dprintf("curr_state: FAULTY disk: %d\n", mdi->disk.number);
 			a->container->ss->set_disk(a, mdi->disk.raid_disk,
 						   mdi->curr_state);
 			check_degraded = 1;
 			if (mdi->curr_state & DS_BLOCKED) {
-                dprintf("FAULTY disk is DS_BLOCKED: %d\n",
-                        mdi->disk.raid_disk);
+				dprintf("FAULTY disk is DS_BLOCKED: %d\n",
+					mdi->disk.raid_disk);
 				mdi->next_state |= DS_UNBLOCK;
-            }
+			}
 			if (a->curr_state == read_auto) {
 				a->container->ss->set_array_state(a, 0);
 				a->next_state = active;
@@ -627,29 +627,38 @@ static int read_and_act(struct active_array *a, fd_set *fds)
 		a->last_checkpoint = sync_completed;
 	}
 
-	// Blockbridge Partition Fencing
-	//
-	// Must be run prior to synchronizing the metadata.
-	//
-	// Rather than take action persistently when there aren't
-	// enough devices in the array, exit mdmon immediately.
-	// Monitoring processes will take action as necessary.
-	if (probe_enabled && a->container->ss->probe_devices) {
-		if (!a->container->ss->probe_devices(a)) {
-			fprintf(stderr, "monitor: array partitioned; exiting!\n");
-			exit(1);
-		}
-	}
+        while (1) {
+                // Blockbridge Partition Fencing
+                //
+                // Must be run prior to synchronizing the metadata.
+                //
+                // Rather than take action persistently when there aren't
+                // enough devices in the array, exit mdmon immediately.
+                // Monitoring processes will take action as necessary.
+                if (probe_enabled && a->container->ss->probe_devices) {
+                        if (!a->container->ss->probe_devices(a)) {
+                                fprintf(stderr, "monitor: array partitioned; exiting!\n");
+                                exit(1);
+                        }
+                }
 
-	if (sync_completed > a->last_checkpoint)
-		a->last_checkpoint = sync_completed;
+                if (sync_completed > a->last_checkpoint)
+                        a->last_checkpoint = sync_completed;
 
-	if (sync_completed >= a->info.component_size)
-		a->last_checkpoint = 0;
+                if (sync_completed >= a->info.component_size)
+                        a->last_checkpoint = 0;
 
-	a->container->ss->sync_metadata(a->container);
-	dprintf("(%d): state:%s action:%s next(", a->info.container_member,
-		array_states[a->curr_state], sync_actions[a->curr_action]);
+                int enough = a->container->ss->sync_metadata(a->container);
+                if (enough)
+                        break;
+                else {
+                        pr_err("unable to synchronize metadata on enough devices; retrying\n");
+                        usleep(1000000);
+                }
+        }
+
+        dprintf("(%d): state:%s action:%s next(", a->info.container_member,
+                array_states[a->curr_state], sync_actions[a->curr_action]);
 
 	/* Effect state changes in the array */
 	if (a->next_state != bad_word) {

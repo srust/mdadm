@@ -64,7 +64,7 @@ int Kill(char *dev, struct supertype *st, int force, int verbose, int noexcl)
 	if (rv == 0 || (force && rv >= 2)) {
 		st->ss->free_super(st);
 		st->ss->init_super(st, NULL, 0, "", NULL, NULL,
-				   INVALID_SECTORS);
+				   INVALID_SECTORS, 0);
 		if (st->ss->store_super(st, fd)) {
 			if (verbose >= 0)
 				pr_err("Could not zero superblock on %s\n",

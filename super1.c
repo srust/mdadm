@@ -1398,7 +1398,7 @@ static int update_super1(struct supertype *st, struct mdinfo *info,
 
 static int init_super1(struct supertype *st, mdu_array_info_t *info,
 		       unsigned long long size, char *name, char *homehost,
-		       int *uuid, unsigned long long data_offset)
+		       int *uuid, unsigned long long data_offset, int mdvote)
 {
 	struct mdp_superblock_1 *sb;
 	int spares;

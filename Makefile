@@ -102,10 +102,14 @@ CFLAGS += -DUSE_PTHREADS
 MON_LDFLAGS += -pthread
 endif
 
+UUID_LDFLAGS=-luuid
+CURL_LDFLAGS=-L/bb/lib64 -Wl,-rpath=/bb/lib64 -lcurl
+CURL_CFLAGS=-I/bb/include
+
 # If you want a static binary, you might uncomment these
 # LDFLAGS = -static
 # STRIP = -s
-LDLIBS=-ldl
+LDLIBS=-ldl $(CURL_LDFLAGS) $(UUID_LDFLAGS)
 
 INSTALL = /usr/bin/install
 DESTDIR =
@@ -133,7 +137,7 @@ OBJS =  mdadm.o config.o policy.o mdstat.o  ReadMe.o util.o maps.o lib.o \
 	mdopen.o super0.o super1.o super-ddf.o super-intel.o bitmap.o \
 	super-mbr.o super-gpt.o \
 	restripe.o sysfs.o sha1.o mapfile.o crc32.o sg_io.o msg.o xmalloc.o \
-	platform-intel.o probe_roms.o crc32c.o
+	platform-intel.o probe_roms.o crc32c.o mdvote.o
 
 CHECK_OBJS = restripe.o sysfs.o maps.o lib.o xmalloc.o dlink.o
 
@@ -142,7 +146,7 @@ SRCS =  $(patsubst %.o,%.c,$(OBJS))
 INCL = mdadm.h part.h bitmap.h
 
 MON_OBJS = mdmon.o monitor.o managemon.o util.o maps.o mdstat.o sysfs.o \
-	policy.o lib.o \
+	policy.o lib.o mdvote.o \
 	Kill.o sg_io.o dlink.o ReadMe.o super-intel.o \
 	super-mbr.o super-gpt.o \
 	super-ddf.o sha1.o crc32.o msg.o bitmap.o xmalloc.o \
@@ -156,7 +160,8 @@ STATICOBJS = pwgr.o
 ASSEMBLE_SRCS := mdassemble.c Assemble.c Manage.c config.c policy.c dlink.c util.c \
 	maps.c lib.c xmalloc.c \
 	super0.c super1.c super-ddf.c super-intel.c sha1.c crc32.c sg_io.c mdstat.c \
-	platform-intel.c probe_roms.c sysfs.c super-mbr.c super-gpt.c mapfile.c
+	platform-intel.c probe_roms.c sysfs.c super-mbr.c super-gpt.c mapfile.c \
+	mdvote.c
 ASSEMBLE_AUTO_SRCS := mdopen.c
 ASSEMBLE_FLAGS:= $(CFLAGS) -DMDASSEMBLE
 ifdef MDASSEMBLE_AUTO

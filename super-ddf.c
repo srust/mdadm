@@ -31,6 +31,7 @@
 #include "sha1.h"
 #include <values.h>
 #include <stddef.h>
+#include "mdvote.h"
 
 /* a non-official T10 name for creation GUIDs */
 static char T10[] = "Linux-MD";
@@ -455,6 +456,10 @@ struct ddf_super {
 	unsigned int		max_part, mppe, conf_rec_len;
 	int			currentdev;
 	int			updates_pending;
+	int64_t                 mdvote_assembly_seq;
+	int                     mdvote_assembly_update;
+	int64_t                 mdvote_member_seq;
+	int                     mdvote_member_update;
 	struct vcl {
 		union {
 			char space[512];
@@ -496,7 +501,7 @@ struct ddf_super {
 				int displayed;
 
 				/* Added by Blockbridge */
-				int probe_ok;
+				int op_ok;
 				int readd;
 				int state;
 			};
@@ -543,10 +548,19 @@ static int init_super_ddf_bvd(struct supertype *st,
 			      mdu_array_info_t *info,
 			      unsigned long long size,
 			      char *name, char *homehost,
-			      int *uuid, unsigned long long data_offset);
+			      int *uuid, unsigned long long data_offset,
+			      int mdvote);
 static int raid10_degraded(struct ddf_super *ddf,
 			   struct mdinfo *info,
-			   int probe);
+			   int op_sts,
+			   const char *op_type);
+static int64_t ddf_get_assembly_seq(struct supertype *st);
+static int64_t ddf_get_member_seq(struct supertype *st);
+static int ddf_put_assembly_seq(struct supertype *st, int64_t seq);
+static int ddf_put_member_seq(struct supertype *st, int64_t seq);
+static int ddf_op_complete_devices_enough(struct active_array *a, int working,
+					  const char *op_type);
+
 
 #if DEBUG
 static void pr_state(struct ddf_super *ddf, const char *msg)
@@ -581,6 +595,24 @@ static void _ddf_set_updates_pending(struct ddf_super *ddf, struct vd_config *vc
 }
 
 #define ddf_set_updates_pending(x,v) _ddf_set_updates_pending((x), (v), __func__)
+
+static void _ddf_set_update_assembly_seq(struct ddf_super *ddf, const char *func)
+{
+	ddf->mdvote_assembly_seq    = be32_to_cpu(ddf->active->seq);
+	ddf->mdvote_assembly_update = 1;
+	pr_state(ddf, func);
+}
+
+#define ddf_set_update_assembly_seq(x) _ddf_set_update_assembly_seq((x), __func__)
+
+static void _ddf_set_update_member_seq(struct ddf_super *ddf, const char *func)
+{
+	ddf->mdvote_member_seq	  = be32_to_cpu(ddf->active->seq);
+	ddf->mdvote_member_update = 1;
+	pr_state(ddf, func);
+}
+
+#define ddf_set_update_member_seq(x) _ddf_set_update_member_seq((x), __func__)
 
 static be32 calc_crc(void *buf, int len)
 {
@@ -2349,7 +2381,8 @@ static unsigned int find_vde_by_guid(const struct ddf_super *ddf,
 static int init_super_ddf(struct supertype *st,
 			  mdu_array_info_t *info,
 			  unsigned long long size, char *name, char *homehost,
-			  int *uuid, unsigned long long data_offset)
+			  int *uuid, unsigned long long data_offset,
+			  int mdvote)
 {
 	/* This is primarily called by Create when creating a new array.
 	 * We will then get add_to_super called for each component, and then
@@ -2385,9 +2418,10 @@ static int init_super_ddf(struct supertype *st,
 	struct phys_disk *pd;
 	struct virtual_disk *vd;
 
-	if (st->sb)
+	if (st->sb) {
 		return init_super_ddf_bvd(st, info, size, name, homehost, uuid,
-					  data_offset);
+					  data_offset, mdvote);
+	}
 
 	if (posix_memalign((void**)&ddf, 512, sizeof(*ddf)) != 0) {
 		pr_err("could not allocate superblock\n");
@@ -2672,7 +2706,8 @@ static int init_super_ddf_bvd(struct supertype *st,
 			      mdu_array_info_t *info,
 			      unsigned long long size,
 			      char *name, char *homehost,
-			      int *uuid, unsigned long long data_offset)
+			      int *uuid, unsigned long long data_offset,
+			      int mdvote)
 {
 	/* We are creating a BVD inside a pre-existing container.
 	 * so st->sb is already set.
@@ -2787,6 +2822,10 @@ static int init_super_ddf_bvd(struct supertype *st,
 	ddf->conflist = vcl;
 	ddf->currentconf = vcl;
 	ddf_set_updates_pending(ddf, NULL);
+	if (mdvote) {
+		ddf_set_update_assembly_seq(ddf);
+		ddf_set_update_member_seq(ddf);
+	}
 	return 1;
 }
 
@@ -3273,27 +3312,80 @@ static int _write_super_to_disk(struct ddf_super *ddf, struct dl *d)
 }
 
 #ifndef MDASSEMBLE
-static int __write_init_super_ddf(struct supertype *st)
+static int __write_init_super_ddf(struct supertype *st, int *enough_out)
 {
 	struct ddf_super *ddf = st->sb;
 	struct dl *d;
+	struct active_array *a;
 	int attempts = 0;
 	int successes = 0;
+	int enough = 0;
+	int not_all;
 
 	pr_state(ddf, __func__);
 
-	/* try to write updated metadata,
-	 * if we catch a failure move on to the next disk
+	/* Try to write updated metadata, if we catch a failure move
+	 * on to the next disk.  Record whether each disk succeded as
+	 * "op_ok".
 	 */
 	for (d = ddf->dlist; d; d=d->next) {
+		int ok = _write_super_to_disk(ddf, d);
 		attempts++;
-		successes += _write_super_to_disk(ddf, d);
+		successes += ok;
+		d->op_ok = ok;
 	}
 
-	dprintf("ddf: sync_metadata attempts:%d successes:%d\n",
-            attempts, successes);
+	// no active array during create; require all online
+	if (!st->arrays)
+		enough = (attempts == successes);
+	else {
+		// Blockbridge: our supported containers only contain
+		// one subarray, so this for loop is trivial.  If
+		// there's more than one subarray, this logic will
+		// bail out if any of the subarrays didn't sync to
+		// enough disks.
+		enough = 1;
+		for (a = st->arrays ; a; a=a->next) {
+			int this_enough;
+			this_enough = ddf_op_complete_devices_enough(a, successes, "write_super");
+			if (!this_enough) {
+				enough = 0;
+				break;
+			}
+		}
+	}
+	not_all = (attempts != successes);
 
-	return attempts != successes;
+	dprintf("sync attempts:%d successes:%d enough:%d\n", attempts, successes, enough);
+
+	// Sync sequence numbers, if majority were updated.  On a
+	// failure to sync these sequence numbers, count as if not
+	// enough devices were synchronized.
+	if (enough) {
+		if (ddf->mdvote_member_update) {
+			if (ddf_put_member_seq(st, ddf->mdvote_member_seq) >= 0) {
+				ddf->mdvote_member_update = 0;
+			}
+			else {
+				not_all = 1;
+				enough = 0;
+			}
+		}
+		if (ddf->mdvote_assembly_update) {
+			if (ddf_put_assembly_seq(st, ddf->mdvote_assembly_seq) >= 0) {
+				ddf->mdvote_assembly_update = 0;
+			}
+			else {
+				not_all = 1;
+				enough = 0;
+			}
+		}
+	}
+
+	if (enough_out)
+		*enough_out = enough;
+
+	return not_all;
 }
 
 static int write_init_super_ddf(struct supertype *st)
@@ -3354,7 +3446,7 @@ static int write_init_super_ddf(struct supertype *st)
 		/* Note: we don't close the fd's now, but a subsequent
 		 * ->free_super() will
 		 */
-		return __write_init_super_ddf(st);
+		return __write_init_super_ddf(st, NULL);
 	}
 }
 
@@ -4295,6 +4387,16 @@ static int ddf_set_array_state(struct active_array *a, int consistent)
 	struct ddf_super *ddf = a->container->sb;
 	int inst = a->info.container_member;
 	int old = ddf->virt->entries[inst].state;
+
+	// Blockbridge:
+	//
+	// Flush assembly sequence numbers on initial transition from a
+	// readonly mode to read/write.
+        if ((a->curr_state == write_pending || a->curr_state == active) &&
+	    (a->prev_state == read_auto     || a->prev_state == readonly)) {
+		ddf_set_update_assembly_seq(ddf);
+	}
+
 	if (consistent == 2) {
 		handle_missing(ddf, a, inst);
 		consistent = 1;
@@ -4326,7 +4428,7 @@ static int ddf_set_array_state(struct active_array *a, int consistent)
 	return consistent;
 }
 
-static int bvd_probe_device_online(const struct ddf_super *ddf, int pd)
+static int bvd_op_device_online(const struct ddf_super *ddf, int pd)
 {
 	struct dl *d;
 		
@@ -4334,7 +4436,7 @@ static int bvd_probe_device_online(const struct ddf_super *ddf, int pd)
 		if (d->pdnum == pd) {
 			dprintf("pd:%d found_refnum:%u\n",
 				pd, be32_to_cpu(d->disk.refnum));
-			return d->probe_ok;
+			return d->op_ok;
 		}
 	}
 
@@ -4343,7 +4445,7 @@ static int bvd_probe_device_online(const struct ddf_super *ddf, int pd)
 
 static int get_bvd_state(const struct ddf_super *ddf,
 			 const struct vd_config *vc,
-			 int probe)
+			 int op_sts, const char *op_type)
 {
 	unsigned int i, n_bvd, working = 0;
 	unsigned int n_prim = be16_to_cpu(vc->prim_elmnt_count);
@@ -4363,13 +4465,13 @@ static int get_bvd_state(const struct ddf_super *ddf,
 		if (pd < 0)
 			continue;
 
-		if (probe) {
-			if (!bvd_probe_device_online(ddf, pd)) {
-				dprintf("i:%d pd:%d probe OFFLINE\n", i, pd);
+		if (op_sts) {
+			if (!bvd_op_device_online(ddf, pd)) {
+				dprintf("i:%d pd:%d %s OFFLINE\n", i, pd, op_type);
 				continue;
 			}
 			else 
-				dprintf("i:%d pd:%d probe online\n", i, pd);
+				dprintf("i:%d pd:%d %s online\n", i, pd, op_type);
 		}
 		
 		st = be16_to_cpu(ddf->phys->entries[pd].state);
@@ -4439,12 +4541,12 @@ static int secondary_state(int state, int other, int seclevel)
 
 static int get_svd_state(const struct ddf_super *ddf, const struct vcl *vcl)
 {
-	int state = get_bvd_state(ddf, &vcl->conf, 0);
+	int state = get_bvd_state(ddf, &vcl->conf, 0, "");
 	unsigned int i;
 	for (i = 1; i < vcl->conf.sec_elmnt_count; i++) {
 		state = secondary_state(
 			state,
-			get_bvd_state(ddf, vcl->other_bvds[i-1], 0),
+			get_bvd_state(ddf, vcl->other_bvds[i-1], 0, ""),
 			vcl->conf.srl);
 	}
 	return state;
@@ -4475,6 +4577,7 @@ static void ddf_set_disk(struct active_array *a, int n, int state)
 	struct mdinfo *mdi;
 	struct dl *dl;
 	int update = 0;
+	int fail_transition = 0;
 
 	dprintf("%d to %x\n", n, state);
 	if (vc == NULL) {
@@ -4535,8 +4638,12 @@ static void ddf_set_disk(struct active_array *a, int n, int state)
 			be16_clear(ddf->phys->entries[pd].state,
 				   cpu_to_be16(DDF_Rebuilding));
 		}
-		if (!be16_eq(old, ddf->phys->entries[pd].state))
+		if (!be16_eq(old, ddf->phys->entries[pd].state)) {
 			update = 1;
+			be16 fail_bit = cpu_to_be16(DDF_Failed);
+			if (!(old._v16 & fail_bit._v16) && (state & DS_FAULTY))
+			    fail_transition = 1;
+		}
 	}
 
 	dprintf("ddf: set_disk %d (%08x) to %x->%02x%s\n", n,
@@ -4559,11 +4666,14 @@ static void ddf_set_disk(struct active_array *a, int n, int state)
 			| state;
 		update = 1;
 	}
-	if (update)
+	if (update) {
 		ddf_set_updates_pending(ddf, vc);
+		if (fail_transition)
+		    ddf_set_update_assembly_seq(ddf);
+	}
 }
 
-static void ddf_sync_metadata(struct supertype *st)
+static int ddf_sync_metadata(struct supertype *st)
 {
 	/*
 	 * Write all data to all devices.
@@ -4573,25 +4683,32 @@ static void ddf_sync_metadata(struct supertype *st)
 	 * changes global data ....
 	 */
 	struct ddf_super *ddf = st->sb;
+	int enough;
 	if (!ddf->updates_pending)
-		return;
-	ddf->updates_pending = 0;
-	__write_init_super_ddf(st);
-	dprintf("ddf: sync_metadata\n");
+		return(1);
+	__write_init_super_ddf(st, &enough);
+	if (enough) {
+		ddf->updates_pending = 0;
+	}
+	return(enough);
 }
 
-// When we probe the devices, we need to
+// When we probe devices, we need to
 //
 //  1. only probe the devices in the subarray
 //  2. track which exact ones are available (for raid-1e)
 //  3. excluding any faulty ones
 //
-static int ddf_probe_devices_enough(struct active_array *a, int working)
+// This same logic is used to verify that a majority of the devices have
+// successfully had their metadata written.
+//
+static int ddf_op_complete_devices_enough(struct active_array *a, int working,
+					  const char *op_type)
 {
 	struct supertype *st = a->container;
 	struct ddf_super *ddf = st->sb;
 
-	dprintf("ddf: probe_devices_enough working:%d\n", working);
+	dprintf("%s working:%d\n", op_type, working);
 
 	if (working == a->info.array.raid_disks)
 		return 1; /* array not degraded */
@@ -4612,8 +4729,8 @@ static int ddf_probe_devices_enough(struct active_array *a, int working)
 		break;
 	case 10:
 		// 2:good, 1:degraded, 0:failed, -1:error
-		// takes into account probe results
-		if (raid10_degraded(ddf, &a->info, 1) < 1)
+		// takes into account probe/sync results
+		if (raid10_degraded(ddf, &a->info, 1, op_type) < 1)
 			return 0;
 		break;
 	default:
@@ -4682,10 +4799,10 @@ static int ddf_probe_devices(struct active_array *a)
 	for (d = ddf->dlist; d; d=d->next) {
 		int ok = ddf_probe_device(ddf, d);
 		working += ok;
-		d->probe_ok = ok;
+		d->op_ok = ok;
 	}
 
-	return ddf_probe_devices_enough(a, working);
+	return ddf_op_complete_devices_enough(a, working, "probe");
 }
 
 static int del_from_conflist(struct vcl **list, const char *guid)
@@ -4820,6 +4937,7 @@ static void ddf_process_phys_update(struct supertype *st,
 			}
 		}
 		ddf_set_updates_pending(ddf, NULL);
+		ddf_set_update_member_seq(ddf); // on disk remove
 		return;
 	}
 	if (!all_ff(ddf->phys->entries[ent].guid))
@@ -5171,7 +5289,8 @@ static int ddf_prepare_update(struct supertype *st,
  */
 static int raid10_degraded(struct ddf_super *ddf,
 			   struct mdinfo *info,
-			   int probe)
+			   int op_sts,
+			   const char *op_type)
 {
 	int n_prim, n_bvds;
 	int i;
@@ -5184,7 +5303,7 @@ static int raid10_degraded(struct ddf_super *ddf,
 	struct vcl *vcl;
 	struct vd_config *vc = find_vdcr(ddf, info->container_member, 0, &n_bvd, &vcl);
 	if (vc && vc->prl == DDF_RAID1E) {
-		int state = get_bvd_state(ddf, vc, probe);
+		int state = get_bvd_state(ddf, vc, op_sts, op_type);
 		switch (state) {
 		case DDF_state_degraded:
 			return 1;
@@ -5292,7 +5411,7 @@ static struct mdinfo *ddf_activate_spare(struct active_array *a,
 			return NULL; /* failed */
 		break;
 	case 10:
-		if (raid10_degraded(ddf, &a->info, 0) < 1)
+		if (raid10_degraded(ddf, &a->info, 0, "") < 1)
 			return NULL;
 		break;
 	default: /* concat or stripe */
@@ -5514,6 +5633,34 @@ static void default_geometry_ddf(struct supertype *st, int *level, int *layout, 
 		*layout = ddf_level_to_layout(*level);
 }
 
+static int64_t ddf_get_assembly_seq(struct supertype *st)
+{
+	struct ddf_super *ddf = st->sb;
+
+	return mdvote_get(ddf->conflist[0].conf.uuid, MDVOTE_ASSEMBLY);
+}
+
+static int64_t ddf_get_member_seq(struct supertype *st)
+{
+	struct ddf_super *ddf = st->sb;
+
+	return mdvote_get(ddf->conflist[0].conf.uuid, MDVOTE_MEMBER);
+}
+
+static int ddf_put_assembly_seq(struct supertype *st, int64_t seq)
+{
+	struct ddf_super *ddf = st->sb;
+
+	return mdvote_put(ddf->conflist[0].conf.uuid, MDVOTE_ASSEMBLY, seq);
+}
+
+static int ddf_put_member_seq(struct supertype *st, int64_t seq)
+{
+	struct ddf_super *ddf = st->sb;
+
+	return mdvote_put(ddf->conflist[0].conf.uuid, MDVOTE_MEMBER, seq);
+}
+
 struct superswitch super_ddf = {
 #ifndef	MDASSEMBLE
 	.examine_super	= examine_super_ddf,
@@ -5551,14 +5698,18 @@ struct superswitch super_ddf = {
 
 #ifndef MDASSEMBLE
 /* for mdmon */
-	.open_new       = ddf_open_new,
-	.set_array_state= ddf_set_array_state,
-	.set_disk       = ddf_set_disk,
-	.sync_metadata  = ddf_sync_metadata,
-	.process_update	= ddf_process_update,
-	.prepare_update	= ddf_prepare_update,
-	.activate_spare = ddf_activate_spare,
-	.probe_devices  = ddf_probe_devices,
+	.open_new	  = ddf_open_new,
+	.set_array_state  = ddf_set_array_state,
+	.set_disk	  = ddf_set_disk,
+	.sync_metadata	  = ddf_sync_metadata,
+	.process_update	  = ddf_process_update,
+	.prepare_update	  = ddf_prepare_update,
+	.activate_spare	  = ddf_activate_spare,
+	.probe_devices	  = ddf_probe_devices,
+	.get_assembly_seq = ddf_get_assembly_seq,
+	.get_member_seq	  = ddf_get_member_seq,
+	.put_assembly_seq = ddf_put_assembly_seq,
+	.put_member_seq	  = ddf_put_member_seq,
 #endif
-	.name = "ddf",
+	.name		  = "ddf",
 };

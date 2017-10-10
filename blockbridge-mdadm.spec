@@ -6,6 +6,7 @@ Source:      blockbridge-mdadm-%{version}.tar.gz
 License:     GPL
 Group:       Utilities/System
 BuildRoot:   %{_tmppath}/%{name}-root
+Requires:    bb-libcurl >= 7.29.0
 
 %description
 mdadm is a program that can be used to create, manage, and monitor

@@ -953,6 +953,13 @@ static int start_array(int mdfd,
 	int i;
 	unsigned int req_cnt;
 
+	if (c->verbose > 0) {
+		dprintf("start_array: okcnt:%u sparecnt:%u rebuilding_cnt:%u "
+			"journalcnt:%u clean:%d start_partial_ok:%d err_ok:%d "
+			"was_forced:%d\n", okcnt, sparecnt, rebuilding_cnt,
+			journalcnt, clean, start_partial_ok, err_ok, was_forced);
+	}
+
 	if (content->journal_device_required && (content->journal_clean == 0)) {
 		if (!c->force) {
 			pr_err("Not safe to assemble with missing or stale journal device, consider --force.\n");
@@ -1319,6 +1326,8 @@ int Assemble(struct supertype *st, char *mddev,
 	char chosen_name[1024];
 	struct map_ent *map = NULL;
 	struct map_ent *mp;
+        int64_t min_assembly_seq = 0L;
+        int64_t min_member_seq = 0L;
 
 	/*
 	 * If any subdevs are listed, then any that don't
@@ -1535,7 +1544,56 @@ try_again:
 	st->ss->getinfo_super(st, content, NULL);
 	clean = content->array.state & 1;
 
-	/* now we have some devices that might be suitable.
+	// Blockbridge:
+	//
+	// Consult clustered mdvote sequence database to determine if
+	// assembly is possible.
+	//
+	if (c->mdvote) {
+		if (st->ss->get_assembly_seq)
+			min_assembly_seq = st->ss->get_assembly_seq(st);
+		if (st->ss->get_member_seq)
+			min_member_seq = st->ss->get_member_seq(st);
+
+		if (min_assembly_seq < 0) {
+			if (min_assembly_seq == -ENOENT) {
+				dprintf("no minimum assembly sequence number found\n");
+				min_assembly_seq = 0;
+			}
+			else {
+				pr_err("failed to retrieve minimum assembly sequence number\n");
+				if (st)
+					st->ss->free_super(st);
+				close(mdfd);
+				free(devices);
+				free(devmap);
+				return 1;
+			}
+		}
+
+		if (min_member_seq < 0) {
+			if (min_member_seq == -ENOENT) {
+				dprintf("no minimum member sequence number found\n");
+				min_member_seq = 0;
+			}
+			else {
+				pr_err("failed to retrieve minimum member sequence number\n");
+				if (st)
+					st->ss->free_super(st);
+				close(mdfd);
+				free(devices);
+				free(devmap);
+				return 1;
+			}
+		}
+	}
+
+	if (c->verbose > 0) {
+		dprintf("min_assembly_seq:%ld, min_member_seq:%ld\n",
+			min_assembly_seq, min_member_seq);
+	}
+
+        /* now we have some devices that might be suitable.
 	 * I wonder how many
 	 */
 	avail = xcalloc(content->array.raid_disks, 1);
@@ -1581,15 +1639,28 @@ try_again:
 			best[i] = -1;
 			continue;
 		}
-		/* Require event counter to be same as, or just less than,
-		 * most recent.  If it is bigger, it must be a stray spare and
-		 * should be ignored.
-		 */
-		if (devices[j].i.events+event_margin >=
-		    devices[most_recent].i.events &&
-		    devices[j].i.events <=
-		    devices[most_recent].i.events
+
+		// For supported array types, use the assembly sequence number to
+		// restrict devices that are too old.  This prevents assembling
+		// a two-device RAID-1 with the older of the two devices.
+		if ((int64_t)devices[j].i.events < min_assembly_seq) {
+			pr_err("%s event counter: %llu is below minimum assembly sequence number: %ld\n",
+			       devices[j].devname, devices[j].i.events, min_assembly_seq);
+		}
+		else if ((int64_t)devices[j].i.events < min_member_seq) {
+			pr_err("%s event counter: %llu is below minimum member sequence number: %ld\n",
+			       devices[j].devname, devices[j].i.events, min_member_seq);
+		}
+		else if (devices[j].i.events+event_margin >=
+			 devices[most_recent].i.events &&
+			 devices[j].i.events <=
+			 devices[most_recent].i.events
 			) {
+			/* Require event counter to be same as, or just less than,
+			 * most recent.	 If it is bigger, it must be a stray spare and
+			 * should be ignored.
+			 */
+
 			devices[j].uptodate = 1;
 			if (devices[j].i.disk.state & (1<<MD_DISK_JOURNAL))
 				journal_clean = 1;
@@ -1607,6 +1678,11 @@ try_again:
 			} else if (devices[j].i.disk.raid_disk != MD_DISK_ROLE_JOURNAL)
 				sparecnt++;
 		}
+                else if (c->verbose > -1) {
+                    pr_err("%s event counter: %llu is not close enough to most_recent device %s: %llu\n",
+                           devices[j].devname, devices[j].i.events,
+                           devices[most_recent].devname, devices[most_recent].i.events);
+                }
 	}
 	free(devmap);
 	if (c->force) {

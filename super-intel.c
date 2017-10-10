@@ -5315,7 +5315,7 @@ static int init_super_imsm_volume(struct supertype *st, mdu_array_info_t *info,
 static int init_super_imsm(struct supertype *st, mdu_array_info_t *info,
 			   unsigned long long size, char *name,
 			   char *homehost, int *uuid,
-			   unsigned long long data_offset)
+			   unsigned long long data_offset, int mdvote)
 {
 	/* This is primarily called by Create when creating a new array.
 	 * We will then get add_to_super called for each component, and then
@@ -8127,17 +8127,18 @@ static int store_imsm_mpb(int fd, struct imsm_super *mpb)
 	return 0;
 }
 
-static void imsm_sync_metadata(struct supertype *container)
+static int imsm_sync_metadata(struct supertype *container)
 {
 	struct intel_super *super = container->sb;
 
 	dprintf("sync metadata: %d\n", super->updates_pending);
 	if (!super->updates_pending)
-		return;
+		return(1);
 
 	write_super_imsm(container, 0);
 
 	super->updates_pending = 0;
+    return(1);
 }
 
 static struct dl *imsm_readd(struct intel_super *super, int idx, struct active_array *a)
