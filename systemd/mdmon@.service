@@ -14,6 +14,8 @@ Before=initrd-switch-root.target
 # mdmon should never complain due to lack of a platform,
 # that is mdadm's job if at all.
 Environment=IMSM_NO_PLATFORM=1
+Environment=BB_COMPAT=1
+EnvironmentFile=-/bb/etc/mdmon.env
 # The mdmon starting in the initramfs (with dracut at least)
 # cannot see sysfs after root is mounted, so we will have to
 # 'takeover'.  As the '--offroot --takeover' don't hurt when

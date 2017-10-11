@@ -62,6 +62,26 @@ mdvote_time64_us(void)
 }
 
 ////////////////////////////////////////////////////////////////////////////////
+/// Generate a string representation of the array UUID
+///
+/// The UUID is stored in big-endian format in the metadata.
+////////////////////////////////////////////////////////////////////////////////
+static void
+mdvote_uuid_unparse(const uuid_t uu_in, char *out)
+{
+    uuid_t   uu;
+    int32_t *suu_in = (void *)&uu_in[0];
+    int32_t *suu    = (void *)&uu[0];
+    int      i;
+
+    for (i = 0; i < 4; i++) {
+        suu[i] = be32toh(suu_in[i]);
+    }
+
+    uuid_unparse(uu, out);
+}
+
+////////////////////////////////////////////////////////////////////////////////
 /// Type-to-string definition
 ///
 /// Non-volatile - used in persistent storage.
@@ -181,7 +201,7 @@ mdvote_get(const unsigned char uuid[16], mdvote_type type)
         return -1L;
     }
 
-    uuid_unparse(uuid, uuidstr);
+    mdvote_uuid_unparse(uuid, uuidstr);
 
     len = snprintf(url, sizeof url, "%s/%s.%s", mdvote_endpoint,
                    uuidstr, mdvote_type_key(type));
@@ -248,7 +268,7 @@ mdvote_put(const unsigned char uuid[16], mdvote_type type, int64_t v)
         return -1L;
     }
 
-    uuid_unparse(uuid, uuidstr);
+    mdvote_uuid_unparse(uuid, uuidstr);
 
     len = snprintf(url, sizeof url, "%s/%s.%s", mdvote_endpoint,
                    uuidstr, mdvote_type_key(type));

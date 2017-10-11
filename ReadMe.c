@@ -159,6 +159,7 @@ struct option long_options[] = {
     {"update",	  1, 0, 'U'},
     {"freeze-reshape", 0, 0, FreezeReshape},
     {"no-mdvote", 0, 0, NoMdVote },
+    {"mdvote",	  0, 0, MdVote },
 
     /* Management */
     {"add",       0, 0, Add},
@@ -385,6 +386,7 @@ char Help_create[] =
 "  --delay=      -d   : bitmap update delay in seconds.\n"
 "  --write-journal=   : Specify journal device for RAID-4/5/6 array\n"
 "  --no-mdvote        : Do not consult Blockbridge clustered sequence database.\n"
+"  --mdvote           : Consult Blockbridge clustered sequence database.\n"
 "\n"
 ;
 
@@ -470,6 +472,7 @@ char Help_assemble[] =
 "  --no-degraded      : Assemble but do not start degraded arrays.\n"
 "  --readonly    -o   : Mark the array as read-only. No resync will start.\n"
 "  --no-mdvote        : Do not consult Blockbridge clustered sequence database.\n"
+"  --mdvote           : Consult Blockbridge clustered sequence database.\n"
 ;
 
 char Help_manage[] =

@@ -5637,12 +5637,18 @@ static int64_t ddf_get_assembly_seq(struct supertype *st)
 {
 	struct ddf_super *ddf = st->sb;
 
+	if (check_env("BB_COMPAT"))
+		return 0;
+
 	return mdvote_get(ddf->conflist[0].conf.uuid, MDVOTE_ASSEMBLY);
 }
 
 static int64_t ddf_get_member_seq(struct supertype *st)
 {
 	struct ddf_super *ddf = st->sb;
+
+	if (check_env("BB_COMPAT"))
+		return 0;
 
 	return mdvote_get(ddf->conflist[0].conf.uuid, MDVOTE_MEMBER);
 }
@@ -5651,12 +5657,18 @@ static int ddf_put_assembly_seq(struct supertype *st, int64_t seq)
 {
 	struct ddf_super *ddf = st->sb;
 
+	if (check_env("BB_COMPAT"))
+		return 0;
+
 	return mdvote_put(ddf->conflist[0].conf.uuid, MDVOTE_ASSEMBLY, seq);
 }
 
 static int ddf_put_member_seq(struct supertype *st, int64_t seq)
 {
 	struct ddf_super *ddf = st->sb;
+
+	if (check_env("BB_COMPAT"))
+		return 0;
 
 	return mdvote_put(ddf->conflist[0].conf.uuid, MDVOTE_MEMBER, seq);
 }
@@ -5708,8 +5720,6 @@ struct superswitch super_ddf = {
 	.probe_devices	  = ddf_probe_devices,
 	.get_assembly_seq = ddf_get_assembly_seq,
 	.get_member_seq	  = ddf_get_member_seq,
-	.put_assembly_seq = ddf_put_assembly_seq,
-	.put_member_seq	  = ddf_put_member_seq,
 #endif
 	.name		  = "ddf",
 };

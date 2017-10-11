@@ -428,6 +428,7 @@ enum special_options {
 	ClusterConfirm,
 	WriteJournal,
 	NoMdVote,
+	MdVote,
 };
 
 enum prefix_standard {
@@ -514,7 +515,7 @@ struct context {
 	char	*action;
 	int	nodes;
 	char	*homecluster;
-	int mdvote;
+	int	mdvote;
 };
 
 struct shape {
@@ -1081,12 +1082,6 @@ extern struct superswitch {
 
     /* return external minimum member sequence number */
 	int64_t (*get_member_seq)(struct supertype *st);
-
-    /* save the external minimum assembly sequence number */
-	int (*put_assembly_seq)(struct supertype *st, int64_t seq);
-
-    /* save the external minimum member sequence number */
-	int (*put_member_seq)(struct supertype *st, int64_t seq);
 
 	int swapuuid; /* true if uuid is bigending rather than hostendian */
 	int external;
