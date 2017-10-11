@@ -333,7 +333,8 @@ mdvote_init(void)
     
     fp = fopen("/etc/hostname", "r");
     if (fp) {
-        fgets(mdvote_origin, sizeof mdvote_origin, fp);
+        if (fgets(mdvote_origin, sizeof mdvote_origin, fp) == NULL)
+            mdvote_origin[0] = '\0';
         fclose(fp);
     }
 

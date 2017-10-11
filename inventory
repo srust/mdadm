@@ -81,6 +81,8 @@ mdmon.c
 mdmon.h
 mdopen.c
 mdstat.c
+mdvote.c
+mdvote.h
 misc/
 misc/mdcheck
 misc/syslog-events
