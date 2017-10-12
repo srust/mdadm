@@ -168,7 +168,7 @@ mdvote_log_res(const char *verb, const char *url_in, CURLcode cres,
             dprintf("%s\n", curl_easy_strerror(cres));
     }
     if (rsp->ofs > 0)
-        dprintf("%s\n", rsp->buf);
+        dprintf("%s: %s\n", url, rsp->buf);
 }
 
 
@@ -235,7 +235,6 @@ mdvote_get(const unsigned char uuid[16], mdvote_type type)
 
     s = NULL;
     rsp.buf[rsp.ofs] = '\0';
-    dprintf("%s vote sequence %s\n", uuidstr, rsp.buf);
 
     long v = strtol(rsp.buf, &s, 10);
     if (v == LONG_MIN || v == LONG_MAX) {

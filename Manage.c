@@ -31,6 +31,8 @@
 #define START_MD		_IO (MD_MAJOR, 2)
 #define STOP_MD			_IO (MD_MAJOR, 3)
 
+int Manage_exit_sts = 0;
+
 int Manage_ro(char *devname, int fd, int readonly)
 {
 	/* switch to readonly or rw
@@ -645,6 +647,36 @@ int attempt_re_add(int fd, int tfd, struct mddev_dev *dv,
 	else
 		/* Assume uuid matches: kernel will check */
 		memcpy(duuid, ouuid, sizeof(ouuid));
+
+	// Blockbridge:
+	//
+	// Prevent adding a device with a superblock that is not part of the
+	// membership, as indicated by mdvote.
+	if (tst->sb && tst->ss->external && tst->ss->get_member_seq) {
+		int64_t min_member_seq = tst->ss->get_member_seq(tst);
+		if (min_member_seq < 0) {
+			if (min_member_seq == -ENOENT) {
+				dprintf("no minimum member sequence number found\n");
+				min_member_seq = 0;
+			}
+			else {
+				pr_err("failed to retrieve minimum member sequence number\n");
+				return -1;
+			}
+		}
+
+		if (verbose > 0)
+			dprintf("min_member_seq:%ld\n", min_member_seq);
+
+		if ((int64_t)mdi.events < min_member_seq) {
+			pr_err("%s event counter: %llu is below minimum member sequence number: %ld\n",
+			       devname, mdi.events, min_member_seq);
+			Manage_exit_sts = MANAGE_EXIT_STS_INVALID_ADD;
+			return -EINVAL;
+		}
+	}
+
+	
 	if ((mdi.disk.state & (1<<MD_DISK_ACTIVE)) &&
 	    !(mdi.disk.state & (1<<MD_DISK_FAULTY)) &&
 	    memcmp(duuid, ouuid, sizeof(ouuid))==0) {

@@ -1300,8 +1300,11 @@ struct stat64;
 # include <ftw.h>
 #endif
 
+#define MANAGE_EXIT_STS_INVALID_ADD 16
+
 extern int add_dev(const char *name, const struct stat *stb, int flag, struct FTW *s);
 
+extern int Manage_exit_sts;
 extern int Manage_ro(char *devname, int fd, int readonly);
 extern int Manage_run(char *devname, int fd, struct context *c);
 extern int Manage_stop(char *devname, int fd, int quiet,

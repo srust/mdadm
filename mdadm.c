@@ -40,6 +40,22 @@ static int misc_list(struct mddev_dev *devlist,
 		     struct supertype *ss, struct context *c);
 char Name[] = "mdadm";
 
+static int bb_compat = 1;
+
+static void blockbridge_compat(void)
+{
+	char buf[64] = { };
+	FILE *fp = fopen("/bb/etc/mdmon.env", "r");
+	if (fp) {
+		if (fgets(buf, sizeof buf, fp) != NULL &&
+		    strstr(buf, "BB_COMPAT=0") != NULL) {
+			setenv("BB_COMPAT", "0", 1);
+			bb_compat = 0;
+		}
+		fclose(fp);
+	}
+}
+
 int main(int argc, char *argv[])
 {
 	int mode = 0;
@@ -47,6 +63,8 @@ int main(int argc, char *argv[])
 	int option_index;
 	int rv;
 	int i;
+
+	blockbridge_compat();
 
 	unsigned long long array_size = 0;
 	unsigned long long data_offset = INVALID_SECTORS;
@@ -72,7 +90,7 @@ int main(int argc, char *argv[])
 	 */
 	struct context c = {
 		.require_homehost = 1,
-		.mdvote = 0,
+		.mdvote = !bb_compat,
 	};
 	struct shape s = {
 		.journaldisks	= 0,
@@ -1396,6 +1414,8 @@ int main(int argc, char *argv[])
 			rv = Manage_run(devlist->devname, mdfd, &c);
 		if (!rv && c.runstop < 0)
 			rv = Manage_stop(devlist->devname, mdfd, c.verbose, 0);
+		if (rv && Manage_exit_sts)
+			rv = Manage_exit_sts;
 		break;
 	case ASSEMBLE:
 		if (devs_found == 1 && ident.uuid_set == 0 &&

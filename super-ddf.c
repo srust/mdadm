@@ -3358,27 +3358,27 @@ static int __write_init_super_ddf(struct supertype *st, int *enough_out)
 
 	dprintf("sync attempts:%d successes:%d enough:%d\n", attempts, successes, enough);
 
-	// Sync sequence numbers, if majority were updated.  On a
-	// failure to sync these sequence numbers, count as if not
-	// enough devices were synchronized.
-	if (enough) {
-		if (ddf->mdvote_member_update) {
-			if (ddf_put_member_seq(st, ddf->mdvote_member_seq) >= 0) {
-				ddf->mdvote_member_update = 0;
-			}
-			else {
-				not_all = 1;
-				enough = 0;
-			}
+	// Sync assembly sequence number if majority updated.  On
+	// failure, count as if not enough devices were synchronized.
+	if (enough && ddf->mdvote_assembly_update) {
+		if (ddf_put_assembly_seq(st, ddf->mdvote_assembly_seq) >= 0) {
+			ddf->mdvote_assembly_update = 0;
 		}
-		if (ddf->mdvote_assembly_update) {
-			if (ddf_put_assembly_seq(st, ddf->mdvote_assembly_seq) >= 0) {
-				ddf->mdvote_assembly_update = 0;
-			}
-			else {
-				not_all = 1;
-				enough = 0;
-			}
+		else {
+			not_all = 1;
+			enough = 0;
+		}
+	}
+
+	// Sync member sequence number if *all* devices updated.  On
+	// failure, count as if not enough devices were synchronized.
+	if (!not_all && ddf->mdvote_member_update) {
+		if (ddf_put_member_seq(st, ddf->mdvote_member_seq) >= 0) {
+			ddf->mdvote_member_update = 0;
+		}
+		else {
+			not_all = 1;
+			enough = 0;
 		}
 	}
 
@@ -4937,7 +4937,6 @@ static void ddf_process_phys_update(struct supertype *st,
 			}
 		}
 		ddf_set_updates_pending(ddf, NULL);
-		ddf_set_update_member_seq(ddf); // on disk remove
 		return;
 	}
 	if (!all_ff(ddf->phys->entries[ent].guid))
@@ -5602,6 +5601,15 @@ static struct mdinfo *ddf_activate_spare(struct active_array *a,
 			be32_to_cpu(vc->phys_refnum[i_prim]),
 			be64_to_cpu(LBA_OFFSET(ddf, vc)[i_prim]));
 	}
+
+	// Blockbridge:
+	//
+	// On the next sync after adding the spare, flush the member
+	// sequence number to mdvote (if configured).  This will be
+	// "one behind" the sequence number at the time of the flush,
+	// but that's OK.
+	ddf_set_update_member_seq(ddf);
+
 	*updates = mu;
 	return rv;
 }
@@ -5637,8 +5645,10 @@ static int64_t ddf_get_assembly_seq(struct supertype *st)
 {
 	struct ddf_super *ddf = st->sb;
 
-	if (check_env("BB_COMPAT"))
+	if (check_env("BB_COMPAT")) {
+		dprintf("BB_COMPAT=1");
 		return 0;
+	}
 
 	return mdvote_get(ddf->conflist[0].conf.uuid, MDVOTE_ASSEMBLY);
 }
@@ -5647,8 +5657,10 @@ static int64_t ddf_get_member_seq(struct supertype *st)
 {
 	struct ddf_super *ddf = st->sb;
 
-	if (check_env("BB_COMPAT"))
+	if (check_env("BB_COMPAT")) {
+		dprintf("BB_COMPAT=1");
 		return 0;
+	}
 
 	return mdvote_get(ddf->conflist[0].conf.uuid, MDVOTE_MEMBER);
 }
@@ -5657,8 +5669,10 @@ static int ddf_put_assembly_seq(struct supertype *st, int64_t seq)
 {
 	struct ddf_super *ddf = st->sb;
 
-	if (check_env("BB_COMPAT"))
+	if (check_env("BB_COMPAT")) {
+		dprintf("BB_COMPAT=1");
 		return 0;
+	}
 
 	return mdvote_put(ddf->conflist[0].conf.uuid, MDVOTE_ASSEMBLY, seq);
 }
@@ -5667,8 +5681,10 @@ static int ddf_put_member_seq(struct supertype *st, int64_t seq)
 {
 	struct ddf_super *ddf = st->sb;
 
-	if (check_env("BB_COMPAT"))
+	if (check_env("BB_COMPAT")) {
+		dprintf("BB_COMPAT=1");
 		return 0;
+	}
 
 	return mdvote_put(ddf->conflist[0].conf.uuid, MDVOTE_MEMBER, seq);
 }
