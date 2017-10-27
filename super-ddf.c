@@ -1486,6 +1486,8 @@ static void examine_vd(int n, struct ddf_super *sb, char *guid)
 
 		printf("   Array UUID[%d] : %s\n", n,
                uuid_to_str((void *)vc->uuid, 0, nbuf, ':'));
+        printf("      BB UUID[%d] : %s\n", n,
+               mdvote_uuid_unparse_ext((void *)vc->uuid, nbuf));
 
 		/* Ok, we know about this VD, let's give more details */
 		printf(" Raid Devices[%d] : %d (", n,
