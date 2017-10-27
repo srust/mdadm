@@ -40,7 +40,7 @@ static int misc_list(struct mddev_dev *devlist,
 		     struct supertype *ss, struct context *c);
 char Name[] = "mdadm";
 
-static int bb_compat = 1;
+static int bb_compat = 0;
 
 static void blockbridge_compat(void)
 {
