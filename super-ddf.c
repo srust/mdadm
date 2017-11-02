@@ -709,23 +709,30 @@ static int layout_md2ddf(const mdu_array_info_t *array,
 		prl = DDF_RAID6;
 		break;
 	case 10:
+        // near-2, even disks
 		if (array->raid_disks % 2 == 0 && array->layout == 0x102) {
+			return err_bad_md_layout(array);
+#if 0  // BLOCKBRIDGE UNSUPPORTED
 			rlq = DDF_RAID1_SIMPLE;
 			prim_elmnt_count =  cpu_to_be16(2);
 			sec_elmnt_count = array->raid_disks / 2;
 			srl = DDF_2SPANNED;
 			prl = DDF_RAID1;
+#endif // BLOCKBRIDGE UNSUPPORTED
 		} else if (array->raid_disks % 3 == 0
 			   && array->layout == 0x103) {
+			return err_bad_md_layout(array);
+#if 0  // BLOCKBRIDGE UNSUPPORTED
 			rlq = DDF_RAID1_MULTI;
 			prim_elmnt_count =  cpu_to_be16(3);
 			sec_elmnt_count = array->raid_disks / 3;
 			srl = DDF_2SPANNED;
 			prl = DDF_RAID1;
-		} else if (array->layout == 0x201) {
+#endif // BLOCKBRIDGE UNSUPPORTED
+		} else if (array->layout == 0x201) { // far-2
 			prl = DDF_RAID1E;
 			rlq = DDF_RAID1E_OFFSET;
-		} else if (array->layout == 0x102) {
+		} else if (array->layout == 0x102) { // near-2, odd disks
 			prl = DDF_RAID1E;
 			rlq = DDF_RAID1E_ADJACENT;
 		} else
@@ -5652,6 +5659,11 @@ static int64_t ddf_get_assembly_seq(struct supertype *st)
 		return 0;
 	}
 
+    if (!ddf->conflist) {
+        pr_err("no conflist for array");
+        return -1L;
+    }
+
 	return mdvote_get(ddf->conflist[0].conf.uuid, MDVOTE_ASSEMBLY);
 }
 
@@ -5663,6 +5675,11 @@ static int64_t ddf_get_member_seq(struct supertype *st)
 		dprintf("BB_COMPAT=1");
 		return 0;
 	}
+
+    if (!ddf->conflist) {
+        pr_err("no conflist for array");
+        return -1L;
+    }
 
 	return mdvote_get(ddf->conflist[0].conf.uuid, MDVOTE_MEMBER);
 }
@@ -5676,6 +5693,11 @@ static int ddf_put_assembly_seq(struct supertype *st, int64_t seq)
 		return 0;
 	}
 
+    if (!ddf->conflist) {
+        pr_err("no conflist for array");
+        return -1L;
+    }
+
 	return mdvote_put(ddf->conflist[0].conf.uuid, MDVOTE_ASSEMBLY, seq);
 }
 
@@ -5687,6 +5709,11 @@ static int ddf_put_member_seq(struct supertype *st, int64_t seq)
 		dprintf("BB_COMPAT=1");
 		return 0;
 	}
+
+    if (!ddf->conflist) {
+        pr_err("no conflist for array");
+        return -1L;
+    }
 
 	return mdvote_put(ddf->conflist[0].conf.uuid, MDVOTE_MEMBER, seq);
 }
