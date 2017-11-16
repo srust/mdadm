@@ -1,3 +1,7 @@
+%global _enable_debug_package 0
+%global debug_package %{nil}
+%global __os_install_post /usr/lib/rpm/brp-compress %{nil}
+
 Summary:     mdadm is used for controlling Linux md devices (aka RAID arrays)
 Name:        blockbridge-mdadm
 Version:     4.0
