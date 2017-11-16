@@ -13,6 +13,7 @@ Before=initrd-switch-root.target
 [Service]
 # mdmon should never complain due to lack of a platform,
 # that is mdadm's job if at all.
+WorkingDirectory=/bb
 Environment=IMSM_NO_PLATFORM=1
 EnvironmentFile=-/bb/etc/mdmon.env
 # The mdmon starting in the initramfs (with dracut at least)
@@ -27,3 +28,4 @@ Type=forking
 # initramfs to rootfs.
 #PIDFile=/run/mdadm/%I.pid
 KillMode=none
+LimitCORE=infinity

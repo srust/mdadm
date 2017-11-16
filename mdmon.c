@@ -509,7 +509,10 @@ static int mdmon(char *devnm, int must_fork, int takeover)
 	if (victim >= 0)
 		victim_sock = connect_monitor(container->devnm);
 
-	ignore = chdir("/");
+	// Blockbridge mdmon is only usable once the system is up.  Do not
+	// change the working directory.
+	// ignore = chdir("/");
+
 	if (!takeover && victim > 0 && victim_sock >= 0) {
 		if (fping_monitor(victim_sock) == 0) {
 			pr_err("%s already managed\n", container->devnm);
