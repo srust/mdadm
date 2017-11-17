@@ -727,7 +727,7 @@ static int update_super0(struct supertype *st, struct mdinfo *info,
 static int init_super0(struct supertype *st, mdu_array_info_t *info,
 		       unsigned long long size, char *ignored_name,
 		       char *homehost, int *uuid,
-		       unsigned long long data_offset, int mdvote)
+		       unsigned long long data_offset, int mdvote, int runstop)
 {
 	mdp_super_t *sb;
 	int spares;

@@ -549,7 +549,7 @@ static int init_super_ddf_bvd(struct supertype *st,
 			      unsigned long long size,
 			      char *name, char *homehost,
 			      int *uuid, unsigned long long data_offset,
-			      int mdvote);
+			      int mdvote, int runstop);
 static int raid10_degraded(struct ddf_super *ddf,
 			   struct mdinfo *info,
 			   int op_sts,
@@ -558,6 +558,8 @@ static int64_t ddf_get_assembly_seq(struct supertype *st);
 static int64_t ddf_get_member_seq(struct supertype *st);
 static int ddf_put_assembly_seq(struct supertype *st, int64_t seq);
 static int ddf_put_member_seq(struct supertype *st, int64_t seq);
+static int ddf_del_assembly_seq(struct supertype *st);
+static int ddf_del_member_seq(struct supertype *st);
 static int ddf_op_complete_devices_enough(struct active_array *a, int working,
 					  const char *op_type);
 
@@ -2391,7 +2393,7 @@ static int init_super_ddf(struct supertype *st,
 			  mdu_array_info_t *info,
 			  unsigned long long size, char *name, char *homehost,
 			  int *uuid, unsigned long long data_offset,
-			  int mdvote)
+			  int mdvote, int runstop)
 {
 	/* This is primarily called by Create when creating a new array.
 	 * We will then get add_to_super called for each component, and then
@@ -2429,7 +2431,7 @@ static int init_super_ddf(struct supertype *st,
 
 	if (st->sb) {
 		return init_super_ddf_bvd(st, info, size, name, homehost, uuid,
-					  data_offset, mdvote);
+					  data_offset, mdvote, runstop);
 	}
 
 	if (posix_memalign((void**)&ddf, 512, sizeof(*ddf)) != 0) {
@@ -2716,7 +2718,7 @@ static int init_super_ddf_bvd(struct supertype *st,
 			      unsigned long long size,
 			      char *name, char *homehost,
 			      int *uuid, unsigned long long data_offset,
-			      int mdvote)
+			      int mdvote, int runstop)
 {
 	/* We are creating a BVD inside a pre-existing container.
 	 * so st->sb is already set.
@@ -2832,6 +2834,15 @@ static int init_super_ddf_bvd(struct supertype *st,
 	ddf->currentconf = vcl;
 	ddf_set_updates_pending(ddf, NULL);
 	if (mdvote) {
+		if (runstop == 1) {
+			if (ddf_del_assembly_seq(st) != 0)
+				return 0;
+			if (ddf_del_member_seq(st) != 0)
+				return 0;
+		} else {
+			dprintf("Skipping deletion of old mdvote sequence "
+				"numbers without --run.\n");
+		}
 		ddf_set_update_assembly_seq(ddf);
 		ddf_set_update_member_seq(ddf);
 	}
@@ -5716,6 +5727,40 @@ static int ddf_put_member_seq(struct supertype *st, int64_t seq)
     }
 
 	return mdvote_put(ddf->conflist[0].conf.uuid, MDVOTE_MEMBER, seq);
+}
+
+static int ddf_del_assembly_seq(struct supertype *st)
+{
+	struct ddf_super *ddf = st->sb;
+
+	if (check_env("BB_COMPAT")) {
+		dprintf("BB_COMPAT=1");
+		return 0;
+	}
+
+    if (!ddf->conflist) {
+        pr_err("no conflist for array");
+        return -1L;
+    }
+
+	return mdvote_del(ddf->conflist[0].conf.uuid, MDVOTE_ASSEMBLY);
+}
+
+static int ddf_del_member_seq(struct supertype *st)
+{
+	struct ddf_super *ddf = st->sb;
+
+	if (check_env("BB_COMPAT")) {
+		dprintf("BB_COMPAT=1");
+		return 0;
+	}
+
+    if (!ddf->conflist) {
+        pr_err("no conflist for array");
+        return -1L;
+    }
+
+	return mdvote_del(ddf->conflist[0].conf.uuid, MDVOTE_MEMBER);
 }
 
 struct superswitch super_ddf = {

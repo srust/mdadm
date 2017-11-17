@@ -321,6 +321,63 @@ mdvote_put(const unsigned char uuid[16], mdvote_type type, int64_t v)
     
 }
 
+int
+mdvote_del(const unsigned char uuid[16], mdvote_type type)
+{
+    CURLcode       cres;
+    curlbuf        rsp;
+    char           errbuf[CURL_ERROR_SIZE];
+    char           url[256];
+    uuid_string_t  uuidstr;
+    int            len;
+    long           http_code = 0;
+    int64_t        start_us  = mdvote_time64_us();
+
+    errbuf[0] = '\0';
+    memset(&rsp, 0, sizeof rsp);
+
+    CURL *c = curl_easy_init();
+    if (!c) {
+        perror("curl_easy_init");
+        return -1L;
+    }
+
+    mdvote_uuid_unparse(uuid, uuidstr);
+
+    len = snprintf(url, sizeof url, "%s/%s.%s", mdvote_endpoint,
+                   uuidstr, mdvote_type_key(type));
+    if (len >= (int)sizeof url) {
+        dprintf("url too long: '%s'\n", url);
+        return -1L;
+    }
+
+    curl_easy_setopt(c, CURLOPT_CUSTOMREQUEST, "DELETE");
+    curl_easy_setopt(c, CURLOPT_URL, url);
+    curl_easy_setopt(c, CURLOPT_WRITEFUNCTION, mdvote_recv_cb);
+    curl_easy_setopt(c, CURLOPT_WRITEDATA, &rsp);
+    curl_easy_setopt(c, CURLOPT_ERRORBUFFER, errbuf);
+
+    cres = curl_easy_perform(c);
+    curl_easy_getinfo(c, CURLINFO_RESPONSE_CODE, &http_code);
+    curl_easy_cleanup(c);
+
+    mdvote_log_res("DELETE", url, cres, http_code, errbuf, NULL, &rsp, start_us);
+
+    if (cres != CURLE_OK)
+        return -EAGAIN;
+    else if (http_code != 200) {
+        switch (http_code) {
+        case 404: // not found
+        case 410: // gone
+            return 0;
+        default:
+            return -EAGAIN;
+        }
+    }
+
+    return 0;
+}
+
 ////////////////////////////////////////////////////////////////////////////////
 /// External interface to UUID stringify
 ////////////////////////////////////////////////////////////////////////////////

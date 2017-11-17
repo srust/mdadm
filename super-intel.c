@@ -5315,7 +5315,8 @@ static int init_super_imsm_volume(struct supertype *st, mdu_array_info_t *info,
 static int init_super_imsm(struct supertype *st, mdu_array_info_t *info,
 			   unsigned long long size, char *name,
 			   char *homehost, int *uuid,
-			   unsigned long long data_offset, int mdvote)
+			   unsigned long long data_offset, int mdvote,
+			   int runstop)
 {
 	/* This is primarily called by Create when creating a new array.
 	 * We will then get add_to_super called for each component, and then

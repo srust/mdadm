@@ -12,6 +12,7 @@ typedef enum mdvote_type_e {
 char *mdvote_uuid_unparse_ext(const unsigned char uuid[16], char *out);
 int64_t mdvote_get(const unsigned char uuid[16], mdvote_type type);
 int mdvote_put(const unsigned char uuid[16], mdvote_type type, int64_t v);
+int mdvote_del(const unsigned char uuid[16], mdvote_type type);
 void mdvote_init(void);
 
 #endif // ___MDVOTE_H___
