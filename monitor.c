@@ -319,6 +319,9 @@ static int check_for_cleared_bb(struct active_array *a, struct mdinfo *mdi)
 	 * acknowledged bad blocks from kernel and compare it against metadata
 	 * list, clear all bad blocks remaining in metadata list
 	 */
+	if (!ss->get_bad_blocks)
+		return -1;
+
 	bb = ss->get_bad_blocks(a, mdi->disk.raid_disk);
 	if (!bb)
 		return -1;
