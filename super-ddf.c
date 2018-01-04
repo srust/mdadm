@@ -1244,7 +1244,7 @@ static int load_super_ddf(struct supertype *st, int fd,
 #endif
 
 	/* 32M is a lower bound */
-	if (dsize <= 32*1024*1024) {
+	if (dsize <= 8*1024*1024) {
 		if (devname)
 			pr_err("%s is too small for ddf: size is %llu sectors.\n",
 			       devname, dsize>>9);
@@ -1651,6 +1651,22 @@ static void examine_super_ddf(struct supertype *st, char *homehost)
 					  ?"yes" : "no"));
 	examine_vds(sb);
 	examine_pds(sb);
+}
+
+static void ddf_dump_pds(struct ddf_super *ddf)
+{
+	unsigned int pdnum;
+
+	for (pdnum = 0; pdnum < be16_to_cpu(ddf->phys->max_pdes);
+	     pdnum++) {
+		if (be32_to_cpu(ddf->phys->entries[pdnum].refnum) ==
+		    0xFFFFFFFF)
+			continue;
+
+		dprintf("dump pd[%u] %08x\n",
+				pdnum,
+				be32_to_cpu(ddf->phys->entries[pdnum].refnum));
+	}
 }
 
 static unsigned int get_vd_num_of_subarray(struct supertype *st)
@@ -2469,7 +2485,7 @@ static int init_super_ddf(struct supertype *st,
 	ddf->anchor.secondary_lba = cpu_to_be64(~(__u64)0);
 	ddf->anchor.type = DDF_HEADER_ANCHOR;
 	memset(ddf->anchor.pad2, 0xff, 3);
-	ddf->anchor.workspace_len = cpu_to_be32(32768); /* Must be reserved */
+	ddf->anchor.workspace_len = cpu_to_be32(8192); /* Must be reserved */
 	/* Put this at bottom of 32M reserved.. */
 	ddf->anchor.workspace_lba = cpu_to_be64(~(__u64)0);
 	max_phys_disks = 1023;   /* Should be enough, 4095 is also allowed */
@@ -2945,7 +2961,7 @@ static unsigned int find_unused_pde(const struct ddf_super *ddf)
 static void _set_config_size(struct phys_disk_entry *pde, const struct dl *dl)
 {
 	__u64 cfs, t;
-	cfs = min(dl->size - 32*1024*2ULL, be64_to_cpu(dl->primary_lba));
+	cfs = min(dl->size - 8*1024*2ULL, be64_to_cpu(dl->primary_lba));
 	t = be64_to_cpu(dl->secondary_lba);
 	if (t != ~(__u64)0)
 		cfs = min(cfs, t);
@@ -2990,6 +3006,11 @@ static int add_to_super_ddf(struct supertype *st,
 		return 0;
 	}
 
+	dprintf("add_to_super: adding new disk %d %d:%d\n",
+			dk->raid_disk, dk->major, dk->minor);
+
+	ddf_dump_pds(ddf);
+
 	/* This is device numbered dk->number.  We need to create
 	 * a phys_disk entry and a more detailed disk_data entry.
 	 */
@@ -3001,15 +3022,15 @@ static int add_to_super_ddf(struct supertype *st,
 	}
 	pde = &ddf->phys->entries[n];
 	get_dev_size(fd, NULL, &size);
-	if (size <= 32*1024*1024) {
-		pr_err("device size must be at least 32MB\n");
+	if (size <= 8*1024*1024) {
+		pr_err("device size must be at least 8MiB\n");
 		return 1;
 	}
 	size >>= 9;
 
 	if (posix_memalign((void**)&dd, 512,
 		           sizeof(*dd) + sizeof(dd->vlist[0]) * ddf->max_part) != 0) {
-		pr_err("could allocate buffer for new disk, aborting\n");
+		pr_err("couldn't allocate buffer for new disk, aborting\n");
 		return 1;
 	}
 	dd->major = major(stb.st_rdev);
@@ -3077,7 +3098,7 @@ static int add_to_super_ddf(struct supertype *st,
 	dd->size = size;
 	/*
 	 * If there is already a device in dlist, try to reserve the same
-	 * amount of workspace. Otherwise, use 32MB.
+	 * amount of workspace. Otherwise, use 8MiB.
 	 * We checked disk size above already.
 	 */
 #define __calc_lba(new, old, lba, mb) do { \
@@ -3091,15 +3112,17 @@ static int add_to_super_ddf(struct supertype *st,
 		else \
 			(new)->lba = cpu_to_be64((new)->size - (mb*1024*2)); \
 	} while (0)
-	__calc_lba(dd, ddf->dlist, workspace_lba, 32);
-	__calc_lba(dd, ddf->dlist, primary_lba, 16);
+	__calc_lba(dd, ddf->dlist, workspace_lba, 8);
+	__calc_lba(dd, ddf->dlist, primary_lba, 4);
 	if (ddf->dlist == NULL ||
 	    be64_to_cpu(ddf->dlist->secondary_lba) != ~(__u64)0)
-		__calc_lba(dd, ddf->dlist, secondary_lba, 32);
+		__calc_lba(dd, ddf->dlist, secondary_lba, 8);
 	_set_config_size(pde, dd);
 
 	sprintf(pde->path, "%17.17s","Information: nil") ;
 	memset(pde->pad, 0xff, 6);
+
+	ddf_dump_pds(ddf);
 
 	if (st->update_tail) {
 		dd->next = ddf->add_list;
@@ -3161,6 +3184,8 @@ static int __write_ddf_structure(struct dl *d, struct ddf_super *ddf, __u8 type)
 	int fd, i, n_config, conf_size, buf_size;
 	int ret = 0;
 	char *conf;
+
+	ddf_dump_pds(ddf);
 
 	fd = d->fd;
 
@@ -3292,17 +3317,17 @@ static int _write_super_to_disk(struct ddf_super *ddf, struct dl *d)
 		ddf->anchor.workspace_lba = d->workspace_lba;
 	else
 		ddf->anchor.workspace_lba =
-			cpu_to_be64(size - 32*1024*2);
+			cpu_to_be64(size - 8*1024*2);
 	if (be64_to_cpu(d->primary_lba) != 0ULL)
 		ddf->anchor.primary_lba = d->primary_lba;
 	else
 		ddf->anchor.primary_lba =
-			cpu_to_be64(size - 16*1024*2);
+			cpu_to_be64(size - 4*1024*2);
 	if (be64_to_cpu(d->secondary_lba) != 0ULL)
 		ddf->anchor.secondary_lba = d->secondary_lba;
 	else
 		ddf->anchor.secondary_lba =
-			cpu_to_be64(size - 32*1024*2);
+			cpu_to_be64(size - 8*1024*2);
 	ddf->anchor.timestamp = cpu_to_be32(time(0) - DECADE);
 	memcpy(&ddf->primary, &ddf->anchor, 512);
 	memcpy(&ddf->secondary, &ddf->anchor, 512);
@@ -3476,9 +3501,9 @@ static __u64 avail_size_ddf(struct supertype *st, __u64 devsize,
 			    unsigned long long data_offset)
 {
 	/* We must reserve the last 32Meg */
-	if (devsize <= (32*1024*2))
+	if (devsize <= (8*1024*2))
 		return 0;
-	return devsize - 32*1024*2;
+	return devsize - 8*1024*2;
 }
 
 #ifndef MDASSEMBLE
@@ -4358,14 +4383,25 @@ static void handle_missing(struct ddf_super *ddf, struct active_array *a, int in
 
 	for (n = 0; ; n++) {
 		vc = find_vdcr(ddf, inst, n, &n_bvd, &vcl);
-		if (!vc)
+		if (!vc) {
+			dprintf("handle_missing: no vc\n");
 			break;
+		}
+		dprintf("handle_missing: phys_refnum %08x\n",
+				be32_to_cpu(vc->phys_refnum[n_bvd]));
 		for (dl = ddf->dlist; dl; dl = dl->next)
 			if (be32_eq(dl->disk.refnum, vc->phys_refnum[n_bvd]))
 				break;
-		if (dl)
+		if (dl) {
 			/* Found this disk, so not missing */
+			dprintf("handle_missing: disk found not missing %08x\n",
+					be32_to_cpu(dl->disk.refnum));
 			continue;
+		}
+
+		/* Found this disk, so not missing */
+		dprintf("handle_missing: disk missing %08x\n",
+				be32_to_cpu(vc->phys_refnum[n_bvd]));
 
 		/* Mark the device as failed/missing. */
 		pd = find_phys(ddf, vc->phys_refnum[n_bvd]);
@@ -4941,6 +4977,8 @@ static void ddf_process_phys_update(struct supertype *st,
 		return;
 	if (be16_and(pd->entries[0].state, cpu_to_be16(DDF_Missing))) {
 		struct dl **dlp;
+		dprintf("phys_update: removing disk %08x\n",
+				be32_to_cpu(pd->entries[0].refnum));
 		/* removing this disk. */
 		be16_set(ddf->phys->entries[ent].state,
 			 cpu_to_be16(DDF_Missing));
@@ -5027,21 +5065,36 @@ static void ddf_remove_failed(struct ddf_super *ddf)
 	unsigned int pd2 = 0;
 	struct dl *dl;
 
+	ddf_dump_pds(ddf);
+
 	for (pdnum = 0; pdnum < be16_to_cpu(ddf->phys->max_pdes);
 	     pdnum++) {
 		if (be32_to_cpu(ddf->phys->entries[pdnum].refnum) ==
 		    0xFFFFFFFF)
 			continue;
-		if (be16_and(ddf->phys->entries[pdnum].state,
-			     cpu_to_be16(DDF_Failed))
-		    && be16_and(ddf->phys->entries[pdnum].state,
-				cpu_to_be16(DDF_Transition))) {
+
+		// skip "failed" which missing marked 'Failed'.
+		// Also prune out global spares. If it hasn't been
+		// claimed by a sub-array, it could be stranded: remove it.
+		be16 state = ddf->phys->entries[pdnum].state;
+		be16 type  = ddf->phys->entries[pdnum].type;
+		if ((be16_and(state, cpu_to_be16(DDF_Transition)) &&
+			 be16_and(state, cpu_to_be16(DDF_Failed))) ||
+			be16_and(type, cpu_to_be16(DDF_Global_Spare))) {
 			/* skip this one unless in dlist*/
 			for (dl = ddf->dlist; dl; dl = dl->next)
-				if (dl->pdnum == (int)pdnum)
+				if (dl->pdnum == (int)pdnum) { 
+					dprintf("-> keeping conf update for %u (%08x)\n",
+					        pdnum,
+						    be32_to_cpu(ddf->phys->entries[pdnum].refnum));
 					break;
-			if (!dl)
+				}
+			if (!dl) {
+				dprintf("-> skipping conf update for %u (%08x)\n",
+					    pdnum,
+					   	be32_to_cpu(ddf->phys->entries[pdnum].refnum));
 				continue;
+			}
 		}
 		if (pdnum == pd2)
 			pd2++;
@@ -5058,6 +5111,7 @@ static void ddf_remove_failed(struct ddf_super *ddf)
 	while (pd2 < pdnum) {
 		memset(ddf->phys->entries[pd2].guid, 0xff,
 		       DDF_GUID_LEN);
+		ddf->phys->entries[pd2].refnum = cpu_to_be32(0xFFFFFFFF);
 		pd2++;
 	}
 }
@@ -5104,18 +5158,14 @@ static void ddf_update_vlist(struct ddf_super *ddf, struct dl *dl)
 	if (dl->vlist[0]) {
 		be16_clear(ddf->phys->entries[dl->pdnum].type,
 			   cpu_to_be16(DDF_Global_Spare));
-		if (!be16_and(ddf->phys
-			      ->entries[dl->pdnum].type,
-			      cpu_to_be16(DDF_Active_in_VD))) {
-			be16_set(ddf->phys
-				 ->entries[dl->pdnum].type,
-				 cpu_to_be16(DDF_Active_in_VD));
-			if (in_degraded)
-				be16_set(ddf->phys
-					 ->entries[dl->pdnum]
-					 .state,
-					 cpu_to_be16
-					 (DDF_Rebuilding));
+		if (!be16_and(ddf->phys->entries[dl->pdnum].type, cpu_to_be16(DDF_Active_in_VD))) {
+			be16_set(ddf->phys->entries[dl->pdnum].type, cpu_to_be16(DDF_Active_in_VD));
+			if (in_degraded) {
+				dprintf("update_vlist: setting Rebuilding on %08x\n",
+						be32_to_cpu(ddf->phys->entries[dl->pdnum].refnum));
+				be16_set(ddf->phys->entries[dl->pdnum].state,
+					 cpu_to_be16(DDF_Rebuilding));
+			}
 		}
 	}
 	if (dl->spare) {
@@ -5201,15 +5251,17 @@ static void ddf_process_conf_update(struct supertype *st,
 			memcpy(vcl->other_bvds[i-1],
 			       update->buf + len * i, len);
 	}
+
 	/* Set DDF_Transition on all Failed devices - to help
-	 * us detect those that are no longer in use
+	 * us detect those that are no longer in use.
 	 */
 	for (pdnum = 0; pdnum < be16_to_cpu(ddf->phys->max_pdes);
-	     pdnum++)
+	     pdnum++) {
 		if (be16_and(ddf->phys->entries[pdnum].state,
 			     cpu_to_be16(DDF_Failed)))
 			be16_set(ddf->phys->entries[pdnum].state,
 				 cpu_to_be16(DDF_Transition));
+	}
 
 	/* Now make sure vlist is correct for each dl. */
 	for (dl = ddf->dlist; dl; dl = dl->next)
