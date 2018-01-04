@@ -302,7 +302,7 @@ static void remove_disk_from_container(struct supertype *st, struct mdinfo *sd)
 
 	/* FIXME this write_init_super shouldn't be here.
 	 * We have it after add_to_super to write to new device,
-	 * but with 'remove' we don't ant to write to that device!
+	 * but with 'remove' we don't want to write to that device!
 	 */
 	st->ss->write_init_super(st);
 	queue_metadata_update(update);
