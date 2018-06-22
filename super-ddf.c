@@ -884,6 +884,10 @@ static int load_ddf_header(int fd, unsigned long long lba,
 		pr_err("bad CRC\n");
 		return 0;
 	}
+	if (hdr->openflag) {
+		pr_err("bad state; metadata marked open\n");
+		return 0;
+	}
 	if (memcmp(anchor->guid, hdr->guid, DDF_GUID_LEN) != 0 ||
 	    memcmp(anchor->revision, hdr->revision, 8) != 0 ||
 	    !be64_eq(anchor->primary_lba, hdr->primary_lba) ||
@@ -891,7 +895,7 @@ static int load_ddf_header(int fd, unsigned long long lba,
 	    hdr->type != type ||
 	    memcmp(anchor->pad2, hdr->pad2, 512 -
 		   offsetof(struct ddf_header, pad2)) != 0) {
-		pr_err("header mismatch\n");
+		pr_err("bad header mismatch\n");
 		return 0;
 	}
 
@@ -975,30 +979,32 @@ static int load_ddf_headers(int fd, struct ddf_super *super, char *devname)
 		return 2;
 	}
 	super->active = NULL;
-	if (load_ddf_header(fd, be64_to_cpu(super->anchor.primary_lba),
-			    dsize >> 9,  1,
-			    &super->primary, &super->anchor) == 0) {
-		if (devname)
-			pr_err("Failed to load primary DDF header on %s\n", devname);
-	} else
+	if (load_ddf_header(fd,
+			    be64_to_cpu(super->anchor.primary_lba),
+			    dsize >> 9,
+			    DDF_HEADER_PRIMARY,
+			    &super->primary,
+			    &super->anchor)) {
 		super->active = &super->primary;
+	} else if (devname) {
+		pr_err("Failed to load primary DDF header on %s\n", devname);
+	}
 
-	if (load_ddf_header(fd, be64_to_cpu(super->anchor.secondary_lba),
-			    dsize >> 9,  2,
-			    &super->secondary, &super->anchor)) {
-		if (super->active == NULL
-		    || (be32_to_cpu(super->primary.seq)
-			< be32_to_cpu(super->secondary.seq) &&
-			!super->secondary.openflag)
-		    || (be32_to_cpu(super->primary.seq)
-			== be32_to_cpu(super->secondary.seq) &&
-			super->primary.openflag && !super->secondary.openflag)
-			)
+	if (load_ddf_header(fd,
+			    be64_to_cpu(super->anchor.secondary_lba),
+			    dsize >> 9,
+			    DDF_HEADER_SECONDARY,
+			    &super->secondary,
+			    &super->anchor)) {
+		if (super->active == NULL ||
+		    be32_to_cpu(super->primary.seq) < be32_to_cpu(super->secondary.seq))
 			super->active = &super->secondary;
 	} else if (devname &&
-		   be64_to_cpu(super->anchor.secondary_lba) != ~(__u64)0)
+		   be64_to_cpu(super->anchor.secondary_lba) != ~(__u64)0) {
 		pr_err("Failed to load secondary DDF header on %s\n",
 		       devname);
+	}
+
 	if (super->active == NULL)
 		return 2;
 	return 0;
@@ -1038,6 +1044,94 @@ static int load_ddf_global(int fd, struct ddf_super *super, char *devname)
 	super->mppe = be16_to_cpu(super->active->max_primary_element_entries);
 	super->conf_rec_len = be16_to_cpu(super->active->config_record_len);
 	return 0;
+}
+
+static int validate_ddf_super(struct ddf_super *super, char *devname, int valid_crc)
+{
+	be32 crc;
+
+	// header
+	struct ddf_header *header = super->active;
+	if (!be32_eq(header->magic, DDF_HEADER_MAGIC)) {
+		pr_err("%s: header magic mismatch\n", devname);
+		goto error;
+	}
+	if (valid_crc) {
+		crc = calc_crc(super->active, 512);
+		if (!be32_eq(crc, super->active->crc)) {
+			pr_err("%s: header crc mismatch\n", devname);
+			goto error;
+		}
+	}
+	if (header->openflag) {
+		pr_err("%s: header is open for write\n", devname);
+		goto error;
+	}
+
+	// controller section
+	struct ddf_controller_data *controller = &super->controller;
+	if (!be32_eq(controller->magic, DDF_CONTROLLER_MAGIC)) {
+		pr_err("%s: controller magic mismatch\n", devname);
+		goto error;
+	}
+	if (valid_crc) {
+		crc = calc_crc(controller, 512);
+		if (!be32_eq(crc, controller->crc)) {
+			pr_err("%s: controller crc mismatch\n", devname);
+			goto error;
+		}
+	}
+
+	// phys section
+	struct phys_disk *phys = super->phys;
+	if (!be32_eq(phys->magic, DDF_PHYS_RECORDS_MAGIC)) {
+		pr_err("%s: phys records magic mismatch\n", devname);
+		goto error;
+	}
+	if (valid_crc) {
+		crc = calc_crc(phys, super->pdsize);
+		if (!be32_eq(crc, phys->crc)) {
+			pr_err("%s: phys records crc mismatch\n", devname);
+			goto error;
+		}
+	}
+
+	// virt section
+	struct virtual_disk *virt = super->virt;
+	if (!be32_eq(virt->magic, DDF_VIRT_RECORDS_MAGIC)) {
+		pr_err("%s: virt records magic mismatch\n", devname);
+		goto error;
+	}
+	if (valid_crc) {
+		crc = calc_crc(virt, super->vdsize);
+		if (!be32_eq(crc, virt->crc)) {
+			pr_err("%s: virt records crc mismatch\n", devname);
+			goto error;
+		}
+	}
+
+	// conf section
+	struct vcl *vcl;
+	int i;
+	for (i = 0, vcl = super->conflist; vcl; vcl = vcl->next, i++) {
+		struct vd_config *vc = &vcl->conf;
+		if (!be32_eq(vc->magic, DDF_VD_CONF_MAGIC)) {
+			pr_err("%s: conf record (%d) magic mismatch\n", devname, i);
+			goto error;
+		}
+		if (valid_crc) {
+			crc = calc_crc(vc, super->conf_rec_len * 512);
+			if (!be32_eq(crc, vc->crc)) {
+				pr_err("%s: conf record (%d) crc mismatch\n", devname, i);
+				goto error;
+			}
+		}
+	}
+
+	return 0;
+
+error:
+	return -1;
 }
 
 #define DDF_UNUSED_BVD 0xff
@@ -1292,7 +1386,14 @@ static int load_super_ddf(struct supertype *st, int fd,
 		return rv;
 	}
 
-	/* Should possibly check the sections .... */
+	// Validate the loaded metadata sections
+	rv = validate_ddf_super(super, devname, 1);
+	if (rv) {
+		if (devname)
+			pr_err("Failed to validate loaded metadata on %s\n", devname);
+		free(super);
+		return rv;
+	}
 
 	st->sb = super;
 	if (st->ss == NULL) {
@@ -2047,6 +2148,9 @@ static int find_phys(const struct ddf_super *ddf, be32 phys_refnum)
 	 * and return it's index
 	 */
 	unsigned int i;
+	if (be32_to_cpu(ddf->phys->magic) == 0xFFFFFFFF)
+		return -1;
+
 	for (i = 0; i < be16_to_cpu(ddf->phys->max_pdes); i++)
 		if (be32_eq(ddf->phys->entries[i].refnum, phys_refnum))
 			return i;
@@ -2563,11 +2667,13 @@ static int init_super_ddf(struct supertype *st,
 	memcpy(&ddf->primary, &ddf->anchor, 512);
 	memcpy(&ddf->secondary, &ddf->anchor, 512);
 
-	ddf->primary.openflag = 1; /* I guess.. */
+	ddf->primary.openflag = 0;
 	ddf->primary.type = DDF_HEADER_PRIMARY;
+	ddf->primary.crc = calc_crc(&ddf->primary, 512);
 
-	ddf->secondary.openflag = 1; /* I guess.. */
+	ddf->secondary.openflag = 0;
 	ddf->secondary.type = DDF_HEADER_SECONDARY;
+	ddf->secondary.crc = calc_crc(&ddf->secondary, 512);
 
 	ddf->active = &ddf->primary;
 
@@ -3192,6 +3298,7 @@ static int __write_ddf_structure(struct dl *d, struct ddf_super *ddf, __u8 type)
 	int fd, i, n_config, conf_size, buf_size;
 	int ret = 0;
 	char *conf;
+	write_buf wb = { .buf = NULL, .fd = -1 };
 
 	fd = d->fd;
 
@@ -3214,29 +3321,34 @@ static int __write_ddf_structure(struct dl *d, struct ddf_super *ddf, __u8 type)
 	header->openflag = 1;
 	header->crc = calc_crc(header, 512);
 
-	lseek64(fd, sector<<9, 0);
-	if (write(fd, header, 512) < 0) {
-        dprintf("header write failed\n");
+	if (write_buffer(fd, sector << 9, header, 512) != 0) {
+		dprintf("header write failed\n");
 		goto out;
-    }
+	}
+
+	off_t base_ofs = (sector << 9) + 512;
+	if (write_buffer_start(&wb, fd, base_ofs, WRITE_BUF_CHUNK_B) != 0) {
+		dprintf("write buffer start failed\n");
+		goto out;
+	}
 
 	ddf->controller.crc = calc_crc(&ddf->controller, 512);
-	if (write(fd, &ddf->controller, 512) < 0) {
-        dprintf("controller write failed\n");
+	if (write_buffer_write(&wb, &ddf->controller, 512) != 0) {
+		dprintf("controller write buffer failed\n");
 		goto out;
-    }
+	}
 
 	ddf->phys->crc = calc_crc(ddf->phys, ddf->pdsize);
-	if (write(fd, ddf->phys, ddf->pdsize) < 0) {
-        dprintf("phys write failed\n");
+	if (write_buffer_write(&wb, ddf->phys, ddf->pdsize) != 0) {
+		dprintf("phys write buffer failed\n");
 		goto out;
-    }
+	}
 
 	ddf->virt->crc = calc_crc(ddf->virt, ddf->vdsize);
-	if (write(fd, ddf->virt, ddf->vdsize) < 0) {
-        dprintf("virt write failed\n");
+	if (write_buffer_write(&wb, ddf->virt, ddf->vdsize) != 0) {
+		dprintf("virt write buffer failed\n");
 		goto out;
-    }
+	}
 
 	/* Now write lots of config records. */
 	n_config = ddf->max_part;
@@ -3278,27 +3390,33 @@ static int __write_ddf_structure(struct dl *d, struct ddf_super *ddf, __u8 type)
 			memset(conf + i*conf_size, 0xff, conf_size);
 		}
 	}
-	if (write(fd, conf, buf_size) != buf_size) {
-        dprintf("conf write failed\n");
+
+	if (write_buffer_write(&wb, conf, buf_size) != 0) {
+		dprintf("conf write buffer failed\n");
 		goto out;
-    }
+	}
 
 	d->disk.crc = calc_crc(&d->disk, 512);
-	if (write(fd, &d->disk, 512) < 0) {
-        dprintf("disk section write failed\n");
+	if (write_buffer_write(&wb, &d->disk, 512) != 0) {
+		dprintf("disk section write buffer failed\n");
 		goto out;
-    }
+	}
+
+	if (write_buffer_flush_try(&wb, WRITE_BUF_RETRY_N) != 0) {
+		dprintf("flush write buffer failed\n");
+		goto out;
+	}
 
 	ret = 1;
 out:
+	write_buffer_free(&wb);
 	header->openflag = 0;
 	header->crc = calc_crc(header, 512);
 
-	lseek64(fd, sector<<9, 0);
-	if (write(fd, header, 512) < 0) {
-        dprintf("out: header write failed\n");
+	if (write_buffer(fd, sector << 9, header, 512) != 0) {
+		dprintf("out: header write failed\n");
 		ret = 0;
-    }
+	}
 
 	return ret;
 }
@@ -3335,6 +3453,7 @@ static int _write_super_to_disk(struct ddf_super *ddf, struct dl *d)
 		ddf->anchor.secondary_lba =
 			cpu_to_be64(size - 32*1024*2);
 	ddf->anchor.timestamp = cpu_to_be32(time(0) - DECADE);
+	ddf->anchor.crc = calc_crc(&ddf->anchor, 512);
 	memcpy(&ddf->primary, &ddf->anchor, 512);
 	memcpy(&ddf->secondary, &ddf->anchor, 512);
 
@@ -3343,21 +3462,26 @@ static int _write_super_to_disk(struct ddf_super *ddf, struct dl *d)
 	ddf->anchor.seq = cpu_to_be32(0xFFFFFFFF); /* no sequencing in anchor */
 	ddf->anchor.crc = calc_crc(&ddf->anchor, 512);
 
-	if (!__write_ddf_structure(d, ddf, DDF_HEADER_PRIMARY)) {
-        dprintf("primary header write failed\n");
+	// validate in-memory super before writing
+	if (validate_ddf_super(ddf, d->devname, 0)) {
+		dprintf("validate in-memory super failed\n");
 		return 0;
-    }
+	}
+
+	if (!__write_ddf_structure(d, ddf, DDF_HEADER_PRIMARY)) {
+		dprintf("primary header write failed\n");
+		return 0;
+	}
 
 	if (!__write_ddf_structure(d, ddf, DDF_HEADER_SECONDARY)) {
-        dprintf("secondary header write failed\n");
+		dprintf("secondary header write failed\n");
 		return 0;
-    }
+	}
 
-	lseek64(fd, (size-1)*512, SEEK_SET);
-	if (write(fd, &ddf->anchor, 512) < 0) {
-        dprintf("anchor write failed\n");
+	if (write_buffer(fd, (size-1)*512, &ddf->anchor, 512)) {
+		dprintf("anchor write failed\n");
 		return 0;
-    }
+	}
 
 	return 1;
 }

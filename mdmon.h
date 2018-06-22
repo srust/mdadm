@@ -109,3 +109,25 @@ static inline int is_resync_complete(struct mdinfo *array)
 	}
 	return array->resync_start >= sync_size;
 }
+
+typedef struct write_buf {
+	int     fd;
+	off_t   fd_ofs;
+	char   *buf;
+	size_t  len;
+	size_t  ofs;
+	size_t  chunk;
+} write_buf;
+
+#define WRITE_BUF_CHUNK_B (512*1024)
+#define WRITE_BUF_ALIGN_B 512
+#define WRITE_BUF_RETRY_N 5
+
+int  write_buffer_start(write_buf *wb, int fd, off_t fd_ofs, size_t chunk);
+int  write_buffer_write(write_buf *wb, void *ptr, size_t len);
+int  write_buffer_flush(write_buf *wb);
+int  write_buffer_comp(write_buf *wb);
+int  write_buffer_flush_try(write_buf *wb, int tries);
+void write_buffer_free(write_buf *wb);
+
+int  write_buffer(int fd, off_t fd_ofs, void *ptr, size_t len);
