@@ -23,6 +23,7 @@
  */
 
 #include	"mdadm.h"
+#include	"mdmon.h"
 #include	"md_p.h"
 #include	<sys/socket.h>
 #include	<sys/utsname.h>
@@ -2254,3 +2255,355 @@ void set_hooks(void)
 	set_cmap_hooks();
 }
 #endif
+
+//////////////////////////////////////////////////////////////////////////////
+/// Write buffers.
+///
+/// The write buffer builds up a buffer to write to an fd, in-memory, so that
+/// the entire buffer can be written at once, in as few writes as possible.
+///
+/// The buffer grows as needed depending on what is being written, starting
+/// at an initial chunk size, and growing in chunk-sized increments.
+///
+/// If a short write occurs, write(2) is continued to be called with the
+/// remaining length of the buffer until successful. If a write(2) error
+/// occurs, then the write is aborted, and error is returned.
+///
+/// Typical Usage:
+///
+///     start()
+///     write(data1)
+///     write(data2)
+///     ...
+///     flush()
+///     free()
+///
+/// Write Comparison:
+///
+/// Use 'comp' routine to read back what was written and compare to the write
+/// buffer. The comparison must match in order to be successful.
+///
+/// Flush retries:
+///
+/// To retry the flush after a read comparison failure, use 'flush_try' which
+/// will write the buffer, and perform a read comparison up to the number
+/// of retries specified.
+///
+/// Wrapper:
+///
+/// For single data structure writes, a helper wrapper can perform all
+/// operations with one call.
+///
+/// Use: 'write_buffer'.
+///
+/// Internally, this performs:
+///
+///     start()
+///     write()
+///     flush()
+///     comp()
+///     free()
+///
+//////////////////////////////////////////////////////////////////////////////
+
+int
+write_buffer_alloc(write_buf *wb, size_t len)
+{
+	void *ptr = NULL;
+
+	// at least chunk size len
+	if (len == 0)
+		len = WRITE_BUF_CHUNK_B;
+
+	// at least align size len
+	if (len < WRITE_BUF_ALIGN_B)
+		len = WRITE_BUF_ALIGN_B;
+
+	// round up to alignment
+	size_t unalign = len % WRITE_BUF_ALIGN_B;
+	if (unalign)
+		len += WRITE_BUF_ALIGN_B - unalign;
+
+	// allocate aligned memory
+	if (posix_memalign((void **)&ptr, WRITE_BUF_ALIGN_B, len) != 0) {
+		dprintf("unable to alloc memory for write buffer of size: 0x%lx, error: %s\n",
+			len, strerror(errno));
+		return -1;
+	}
+
+	// realloc (copy existing buffer to new)
+	if (wb->buf) {
+		memcpy(ptr, wb->buf, wb->ofs);
+		free(wb->buf);
+	}
+
+	// set buffer pointer and len
+	wb->buf = ptr;
+	wb->len = len;
+
+	return 0;
+}
+
+int
+write_buffer_realloc_needed(write_buf *wb, size_t len)
+{
+	if (wb->ofs + len > wb->len)
+		return 1;
+	else
+		return 0;
+}
+
+//////////////////////////////////////////////////////////////////////////////
+/// write buffer realloc.
+///
+/// Grow the write buffer.
+//////////////////////////////////////////////////////////////////////////////
+int
+write_buffer_realloc(write_buf *wb, size_t len)
+{
+	// is realloc needed
+	if (!write_buffer_realloc_needed(wb, len))
+		return 0;
+
+	// increment length to alloc
+	len = wb->ofs + len;
+
+	// round up to chunk
+	size_t unalign = len % wb->chunk;
+	if (unalign)
+		len += wb->chunk - unalign;
+
+	return write_buffer_alloc(wb, len);
+}
+
+//////////////////////////////////////////////////////////////////////////////
+/// write buffer start
+///
+/// Allocate a write buffer structure for the indicated fd at the indicated
+/// fd offset. Allocate initial 'chunk' size of buffer.
+//////////////////////////////////////////////////////////////////////////////
+int
+write_buffer_start(write_buf *wb, int fd, off_t fd_ofs, size_t chunk)
+{
+	memset(wb, 0, sizeof (*wb));
+	wb->fd     = fd;
+	wb->fd_ofs = fd_ofs;
+	wb->len    = chunk;
+	wb->ofs    = 0;
+	wb->chunk  = chunk;
+
+	return write_buffer_alloc(wb, chunk);
+}
+
+//////////////////////////////////////////////////////////////////////////////
+/// write buffer write
+///
+/// Buffer a write.
+//////////////////////////////////////////////////////////////////////////////
+int
+write_buffer_write(write_buf *wb, void *ptr, size_t len)
+{
+	int ret;
+
+	if (write_buffer_realloc_needed(wb, len)) {
+		ret = write_buffer_realloc(wb, len);
+		if (ret)
+			return ret;
+	}
+
+	memcpy(&wb->buf[wb->ofs], ptr, len);
+	wb->ofs += len;
+
+	return 0;
+}
+
+//////////////////////////////////////////////////////////////////////////////
+/// write buffer comparison
+///
+/// Read buffer length from fd and compare to in-memory buffer.
+//////////////////////////////////////////////////////////////////////////////
+int
+write_buffer_comp(write_buf *wb)
+{
+	char   *buf = NULL;
+	off_t   ofs;
+	ssize_t n;
+	int     ret = -1;
+
+	// allocate read buffer
+	if (posix_memalign((void **)&buf, 512, wb->len) != 0) {
+		dprintf("unable to alloc memory for read buffer of size: 0x%lx, error: %s\n",
+		wb->len, strerror(errno));
+		goto out;
+	}
+
+	// seek to buffer offset
+	ofs = lseek64(wb->fd, wb->fd_ofs, SEEK_SET);
+	if (ofs < 0) {
+		dprintf("lseek failed to set ofs to 0x%lx, error: %s\n",
+			wb->fd_ofs, strerror(errno));
+		goto out;
+	}
+	if (ofs != wb->fd_ofs) {
+		dprintf("lseek set to wrong offset; expected 0x%lx, received 0x%lx\n",
+			wb->fd_ofs, ofs);
+		goto out;
+	}
+
+	// readback and compare read result
+	n = read(wb->fd, &buf[0], wb->ofs);
+	if (n < 0) {
+		dprintf("read failed: error: %s\n", strerror(errno));
+		goto out;
+	}
+	if ((size_t)n != wb->ofs) {
+		dprintf("read incomplete: read %ld bytes out of %ld\n",
+			n, wb->ofs);
+		ret = 1;
+		goto out;
+	}
+
+	if (memcmp(wb->buf, buf, wb->ofs) != 0) {
+		dprintf("compare failed: read data does not match written\n");
+
+		// compare unsuccessful
+		ret = 2;
+		goto out;
+	}
+
+	// compare successful
+	ret = 0;
+out:
+	free(buf);
+	return ret;
+}
+
+//////////////////////////////////////////////////////////////////////////////
+/// write buffer flush
+///
+/// Write out the buffer to disk.
+//////////////////////////////////////////////////////////////////////////////
+int
+write_buffer_flush(write_buf *wb)
+{
+	off_t   ofs;
+	ssize_t n;
+	int     ret = -1;
+
+	// seek to buffer offset
+	ofs = lseek64(wb->fd, wb->fd_ofs, SEEK_SET);
+	if (ofs < 0) {
+		dprintf("lseek failed to set ofs to 0x%lx, error: %s\n",
+		        wb->fd_ofs, strerror(errno));
+		goto out;
+	}
+	if (ofs != wb->fd_ofs) {
+		dprintf("lseek set to wrong offset; expected 0x%lx, received 0x%lx\n",
+		        wb->fd_ofs, ofs);
+		goto out;
+	}
+
+	// write buffer until all data is flushed
+	n = write(wb->fd, wb->buf, wb->ofs);
+	if (n < 0) {
+		dprintf("write failed: error: %s\n", strerror(errno));
+		goto out;
+	}
+	if ((size_t)n != wb->ofs) {
+		dprintf("write incomplete: wrote %ld bytes out of %ld.\n",
+			n, wb->ofs);
+		ret = 1;
+		goto out;
+	}
+
+	ret = 0;
+out:
+	return ret;
+}
+
+//////////////////////////////////////////////////////////////////////////////
+/// write buffer flush with retries
+///
+/// Write out the buffer to disk, read back what was written and compare it.
+/// Retry the write and read comparision up the 'tries' specified.
+//////////////////////////////////////////////////////////////////////////////
+int
+write_buffer_flush_try(write_buf *wb, int tries)
+{
+	int i;
+	int ret = -1;
+
+	if (tries <= 0)
+		tries = 1;
+
+	for (i = 0; i < tries; i++) {
+		// flush write
+		ret = write_buffer_flush(wb);
+		if (ret < 0)
+			goto out;
+		if (ret != 0)
+			continue;
+
+		// read and compare
+		ret = write_buffer_comp(wb);
+		if (ret < 0)
+			goto out;
+		if (ret != 0)
+			continue;
+
+		// successful write and comparision
+		break;
+	}
+
+	if (i == tries) {
+		dprintf("unable to write; failed write flush after %d tries\n",
+			tries);
+		goto out;
+	}
+
+	ret = 0;
+out:
+	return ret;
+}
+
+//////////////////////////////////////////////////////////////////////////////
+/// write buffer free
+///
+/// free write buffer when finished with it
+//////////////////////////////////////////////////////////////////////////////
+void
+write_buffer_free(write_buf *wb)
+{
+	free(wb->buf);
+	wb->buf = NULL;
+	memset(wb, 0, sizeof (*wb));
+}
+
+//////////////////////////////////////////////////////////////////////////////
+/// write buffer WRAPPER
+///
+/// Perform whole write buffer lifecycle for a given pointer and length.
+//////////////////////////////////////////////////////////////////////////////
+int
+write_buffer(int fd, off_t fd_ofs, void *ptr, size_t len)
+{
+	write_buf wb = { .buf = NULL, .fd = -1 };
+	int ret = -1;
+
+	ret = write_buffer_start(&wb, fd, fd_ofs, len);
+	if (ret)
+		goto out;
+
+	ret = write_buffer_write(&wb, ptr, len);
+	if (ret)
+		goto out;
+
+	ret = write_buffer_flush_try(&wb, WRITE_BUF_RETRY_N);
+	if (ret)
+		goto out;
+
+	ret = 0;
+out:
+	write_buffer_free(&wb);
+	return ret;
+}
