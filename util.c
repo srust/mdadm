@@ -912,12 +912,34 @@ void print_r10_layout(int layout)
 #endif
 
 unsigned long long calc_array_size(int level, int raid_disks, int layout,
-				   int chunksize, unsigned long long devsize)
+				   int chunksize,
+				   unsigned long long devsize)
 {
+	unsigned long long arrsize;
+	int chunksize_sect = chunksize / 512; // chunksize is in bytes
+
 	if (level == 1)
 		return devsize;
-	devsize &= ~(unsigned long long)((chunksize>>9)-1);
-	return (get_data_disks_x10(level, layout, raid_disks) * devsize) / 10;
+
+	devsize /= chunksize_sect;
+
+	if (level == 10) {
+		int near_copies = layout & 255;
+		int far_copies  = (layout >> 8) & 255;
+
+		// must be able to fit "far copies" on each raid disk,
+		// and store "near copies" in the resulting array
+		devsize /= far_copies;
+		arrsize  = devsize * raid_disks;
+		arrsize /= near_copies;
+	}
+	else {
+		arrsize = (get_data_disks_x10(level, layout, raid_disks) * devsize) / 10;
+	}
+
+	arrsize *= chunksize_sect;
+
+	return arrsize;
 }
 
 int get_data_disks_x10(int level, int layout, int raid_disks)
