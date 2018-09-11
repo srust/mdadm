@@ -95,7 +95,11 @@ static inline int count_dirty_bits_byte(char byte, int num_bits)
 	return num;
 }
 
-static int count_dirty_bits(char *buf, int num_bits)
+#define DIRTY_MIB_ALLOC  1024
+uint64_t dirty_MiB_list[DIRTY_MIB_ALLOC] = { };
+int dirty_MiB_num = 0;
+
+static int count_dirty_bits(char *buf, int num_bits, uint64_t chunksize_bytes)
 {
 	int i, num = 0;
 
@@ -104,6 +108,18 @@ static int count_dirty_bits(char *buf, int num_bits)
 
 	if (num_bits % 8) /* not an even byte boundary */
 		num += count_dirty_bits_byte(buf[i], num_bits % 8);
+
+    for (i = 0; i < num_bits; i++) {
+        if (dirty_MiB_num >= DIRTY_MIB_ALLOC)
+            break;
+        int word = i/32;
+        int bit = i % 32;
+        uint32_t *wordbuf = (void *)buf;
+        int bit_idx = 1 << bit;
+        uint64_t MiB = (uint64_t)i * (chunksize_bytes / (1024UL * 1024));
+        if (wordbuf[word] & bit_idx)
+            dirty_MiB_list[dirty_MiB_num++] = MiB;
+    }
 
 	return num;
 }
@@ -161,7 +177,7 @@ static bitmap_info_t *bitmap_fd_read(int fd, int brief)
 		if (remaining > (n-skip) * 8) /* we want the full buffer */
 			remaining = (n-skip) * 8;
 
-		dirty_bits += count_dirty_bits(buf+skip, remaining);
+		dirty_bits += count_dirty_bits(buf+skip, remaining, info->sb.chunksize);
 
 		read_bits += remaining;
 		n = 0;
@@ -365,6 +381,17 @@ int ExamineBitmap(char *filename, int brief, struct supertype *st)
 			 close(fd);
 		}
 	}
+
+    if (dirty_MiB_num > 0) {
+        printf("   Dirty Regions :\n");
+        for (i = 0; i < dirty_MiB_num; i++) {
+            printf("                   [%8lu, %8lu) MiB\n",
+                   dirty_MiB_list[i],
+                   dirty_MiB_list[i] + (sb->chunksize / (1024 * 1024)));
+        }
+        if (dirty_MiB_num >= DIRTY_MIB_ALLOC)
+            printf("                   ... region list truncated\n");
+    }
 
 free_info:
 	free(info);
