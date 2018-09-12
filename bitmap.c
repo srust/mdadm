@@ -116,7 +116,7 @@ static int count_dirty_bits(char *buf, int num_bits, uint64_t chunksize_bytes)
         int bit = i % 32;
         uint32_t *wordbuf = (void *)buf;
         int bit_idx = 1 << bit;
-        uint64_t MiB = (uint64_t)i * (chunksize_bytes / (1024UL * 1024));
+        uint64_t MiB = (uint64_t)(i * chunksize_bytes) / (1024UL * 1024);
         if (wordbuf[word] & bit_idx)
             dirty_MiB_list[dirty_MiB_num++] = MiB;
     }
