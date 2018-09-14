@@ -176,6 +176,9 @@ typedef struct bitmap_super_s {
  *    devices.  For raid10 it is the size of the array.
  */
 
+#define BITMAP_EVENTS_CLEARED_DONTSET -1
+#define BITMAP_EVENTS_CLEARED_INITIAL  1
+
 #ifdef __KERNEL__
 
 /* the in-memory bitmap is represented by bitmap_pages */

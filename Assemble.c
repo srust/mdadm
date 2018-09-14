@@ -976,25 +976,11 @@ static int start_array(int mdfd,
 		       mddev, strerror(errno));
 		return 1;
 	}
-	if (ident->bitmap_fd >= 0) {
-		if (ioctl(mdfd, SET_BITMAP_FILE, ident->bitmap_fd) != 0) {
-			pr_err("SET_BITMAP_FILE failed.\n");
-			return 1;
-		}
-	} else if (ident->bitmap_file) {
-		/* From config file */
-		int bmfd = open(ident->bitmap_file, O_RDWR);
-		if (bmfd < 0) {
-			pr_err("Could not open bitmap file %s\n",
-			       ident->bitmap_file);
-			return 1;
-		}
-		if (ioctl(mdfd, SET_BITMAP_FILE, bmfd) != 0) {
-			pr_err("Failed to set bitmapfile for %s\n", mddev);
-			close(bmfd);
-			return 1;
-		}
-		close(bmfd);
+	rv = set_bitmap_file(ident, mdfd, BITMAP_EVENTS_CLEARED_DONTSET);
+	if (rv) {
+		pr_err("failed to set bitmap file for %s: %s\n",
+				mddev, strerror(errno));
+		return 1;
 	}
 
 	/* First, add the raid disks, but add the chosen one last */
@@ -1513,7 +1499,7 @@ try_again:
 		int err;
 		err = assemble_container_content(st, mdfd, content, c,
 										 chosen_name,
-										 ident->bitmap_fd, NULL);
+										 ident, NULL);
 		close(mdfd);
 		return err;
 	}
@@ -1924,7 +1910,8 @@ try_again:
 #ifndef MDASSEMBLE
 int assemble_container_content(struct supertype *st, int mdfd,
 							   struct mdinfo *content, struct context *c,
-							   char *chosen_name, int bitmap_fd, int *result)
+							   char *chosen_name, struct mddev_ident *ident,
+							   int *result)
 {
 	struct mdinfo *dev, *sra, *dev2;
 	int working = 0, preexist = 0;
@@ -1949,11 +1936,11 @@ int assemble_container_content(struct supertype *st, int mdfd,
 		}
 	}
 
-	if (bitmap_fd >= 0) {
-		if (ioctl(mdfd, SET_BITMAP_FILE, bitmap_fd) != 0) {
-			pr_err("SET_BITMAP_FILE failed.\n");
-			return 1;
-		}
+	err = set_bitmap_file(ident, mdfd, BITMAP_EVENTS_CLEARED_INITIAL);
+	if (err) {
+		pr_err("Failed to set bitmap file for %s: %s\n",
+			   chosen_name, strerror(errno));
+		return 1;
 	}
 
 	/* There are two types of reshape: container wide or sub-array specific
@@ -2039,7 +2026,6 @@ int assemble_container_content(struct supertype *st, int mdfd,
 		}
 		return 1;
 	}
-
 
 	if (start_reshape) {
 		int spare = content->array.raid_disks + expansion;

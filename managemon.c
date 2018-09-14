@@ -414,7 +414,6 @@ static void add_disk_to_container(struct supertype *st, struct mdinfo *sd,
 		free_mdstat(ents);
 	}
 
-
 	// Blockbridge Partition Fencing
 	//
 	// Must be run prior to synchronizing the metadata.
@@ -667,9 +666,19 @@ static void manage_member(struct mdstat_ent *mdstat,
 		 * and open files for each newdev */
 		for (d = newdev; d ; d = d->next) {
 			struct mdinfo *newd;
+			int resume = 0;
 
 			newd = xmalloc(sizeof(*newd));
-			if (sysfs_add_disk(&newa->info, d, 0) < 0) {
+
+			/* re-add case, raid_disk >= 0.
+			 * Set resume to recover from bitmap
+			 */
+			if (d->disk.raid_disk >= 0 &&
+				d->disk.state > 0) {
+				resume = 1;
+				d->recovery_start = 0;
+			}
+			if (sysfs_add_disk(&newa->info, d, resume) < 0) {
 				free(newd);
 				continue;
 			}

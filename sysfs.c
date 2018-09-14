@@ -713,17 +713,23 @@ int sysfs_add_disk(struct mdinfo *sra, struct mdinfo *sd, int resume)
 
 	rv = sysfs_set_num(sra, sd, "offset", sd->data_offset);
 	rv |= sysfs_set_num(sra, sd, "size", (sd->component_size+1) / 2);
+
 	if (sra->array.level != LEVEL_CONTAINER) {
-		if (sd->recovery_start == MaxSector)
+		if (sd->recovery_start == MaxSector) {
 			/* This can correctly fail if array isn't started,
 			 * yet, so just ignore status for now.
 			 */
 			sysfs_set_str(sra, sd, "state", "insync");
+		}
+		if (resume) {
+			sysfs_set_num(sra, sd, "recovery_start", sd->recovery_start);
+			if (sd->disk.raid_disk >= 0)
+				sysfs_set_str(sra, sd, "state", "insync");
+		}
 		if (sd->disk.raid_disk >= 0)
 			rv |= sysfs_set_num(sra, sd, "slot", sd->disk.raid_disk);
-		if (resume)
-			sysfs_set_num(sra, sd, "recovery_start", sd->recovery_start);
 	}
+
 	if (sd->bb.supported) {
 		if (sysfs_set_str(sra, sd, "state", "external_bbl")) {
 			/*
