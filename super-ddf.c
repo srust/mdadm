@@ -3157,9 +3157,11 @@ static int add_to_super_ddf(struct supertype *st,
 	if (dk->raid_disk >= 0) {
 		dd->readd = 1;
 		dd->state = dk->state;
+		dd->raiddisk = dk->raid_disk;
 	} else {
 		dd->readd = 0;
 		dd->state = 0;
+		dd->raiddisk = -1;
 	}
 
 	dd->disk.magic = DDF_PHYS_DATA_MAGIC;
@@ -5726,7 +5728,7 @@ static struct mdinfo *ddf_activate_spare(struct active_array *a,
 			di->disk.major = dl->major;
 			di->disk.minor = dl->minor;
 			di->disk.state = dl->readd ? dl->state : 0;
-			di->recovery_start = dl->readd ? MaxSector : 0;
+			di->recovery_start = 0;
 			di->data_offset = pos;
 			di->component_size = a->info.component_size;
 			di->next = rv;

@@ -840,9 +840,9 @@ int attempt_re_add(int fd, int tfd, struct mddev_dev *dv,
 			}
 			sra->array.level = LEVEL_CONTAINER;
 			mdi.disk = disc;
-			mdi.recovery_start = 1;
+			mdi.recovery_start = 0;
 			pr_err("re-adding back previous non-faulty disk\n");
-			if (sysfs_add_disk(sra, &mdi, 0) != 0) {
+			if (sysfs_add_disk(sra, &mdi, 1) != 0) {
 				pr_err("add new device to external metadata failed for %s\n", dv->devname);
 				close(container_fd);
 				sysfs_free(sra);
