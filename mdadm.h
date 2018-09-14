@@ -1476,10 +1476,9 @@ extern unsigned long long calc_array_size(int level, int raid_disks, int layout,
 extern int flush_metadata_updates(struct supertype *st);
 extern void append_metadata_update(struct supertype *st, void *buf, int len);
 extern int assemble_container_content(struct supertype *st, int mdfd,
-									  struct mdinfo *content,
-									  struct context *c,
-									  char *chosen_name, int bitmap_fd,
-									  int *result);
+				      struct mdinfo *content, struct context *c,
+				      char *chosen_name, struct mddev_ident *ident,
+				      int *result);
 #define	INCR_NO		1
 #define	INCR_UNSAFE	2
 #define	INCR_ALREADY	4
@@ -1758,3 +1757,9 @@ char *xstrdup(const char *str);
 #define INVALID_SECTORS 1
 /* And another special number needed for --data_offset=variable */
 #define VARIABLE_OFFSET 3
+
+
+//////////////////////////////////////////////////////////////////////////////
+/// initialize and inform the kernel of a bitmap file if needed
+//////////////////////////////////////////////////////////////////////////////
+int set_bitmap_file(struct mddev_ident *ident, int mdfd, int events_cleared);

@@ -25,6 +25,7 @@
 #include	"mdadm.h"
 #include	"mdmon.h"
 #include	"md_p.h"
+#include	"bitmap.h"
 #include	<sys/socket.h>
 #include	<sys/utsname.h>
 #include	<sys/wait.h>
@@ -2628,4 +2629,107 @@ write_buffer(int fd, off_t fd_ofs, void *ptr, size_t len)
 out:
 	write_buffer_free(&wb);
 	return ret;
+}
+
+//////////////////////////////////////////////////////////////////////////////
+// set_bitmap_file
+//
+// Set a bitmap file for an array, correctly initializing the bitmap in the
+// case of container/ddf external metadata. For external metadata, the kernel
+// (as of 4.14.69) does not track bitmap->events and mddev->events. This means
+// that both values are always 0. When loading the bitmap from disk on
+// a degraded array, the kernel compares these two values: if they are
+// different; the bitmap bits are kept in the bitmap and used for resync; if
+// they are the same the bitmap bits in the existing bitmap are discarded.
+//
+// We must keep the bitmaps for external metadata if the array is degraded. Set
+// the bitmap->events here so that the kernel keeps the bits. It is
+// a workaround for the kernel behavior. In lieu of fully supporting tracking
+// of the events between bitmap and array.
+//////////////////////////////////////////////////////////////////////////////
+int
+set_bitmap_file(struct mddev_ident *ident, int mdfd, int events_cleared)
+{
+	int bitmap_fd = -1;
+	bitmap_super_t bitmap_info;
+
+	// check if bitmap file is required
+	// - NOOP success if not
+	if (!ident || (ident->bitmap_fd < 0 && !ident->bitmap_file))
+		return 0;
+
+	// read bitmap file from configuration and open that file; or use
+	// previously opened file.
+	if (ident->bitmap_fd >= 0) {
+		bitmap_fd = ident->bitmap_fd;
+	} else if (ident->bitmap_file) {
+		bitmap_fd = open(ident->bitmap_file, O_RDWR);
+		if (bitmap_fd < 0) {
+			pr_err("Could not open bitmap file: %s: %s\n",
+			       ident->bitmap_file,
+			       strerror(errno));
+			return 1;
+		}
+		ident->bitmap_fd = bitmap_fd;
+	}
+
+	// read in the bitmap file if updating the bitmap superblock
+	if (events_cleared != BITMAP_EVENTS_CLEARED_DONTSET) {
+		// initialize
+		memset(&bitmap_info, 0, sizeof bitmap_info);
+
+		// read in the super
+		int n = read(bitmap_fd, &bitmap_info, sizeof bitmap_info);
+		if (n != sizeof bitmap_info) {
+			if (n < 0)
+				pr_err("reading bitmap file: read failed: %s\n",
+				       strerror(errno));
+			else
+				pr_err("reading bitmap file: short read: %s\n",
+				       strerror(errno));
+			return 1;
+		}
+
+		if (lseek64(bitmap_fd, 0, SEEK_SET) < 0) {
+			pr_err("unable to lseek bitmap file: %s\n",
+			       strerror(errno));
+			return 1;
+		}
+
+		// ensure bitmap is valid before updating
+		if (bitmap_info.magic != BITMAP_MAGIC) {
+			pr_err("bitmap file magic does not match: expected 0x%x, received: 0x%x\n",
+			       bitmap_info.magic, BITMAP_MAGIC);
+			return 1;
+		}
+
+		// set events_cleared
+		bitmap_info.events_cleared = events_cleared;
+
+		// write back out the bitmap superblock
+		n = pwrite(bitmap_fd, &bitmap_info, sizeof bitmap_info, 0);
+		if (n != sizeof bitmap_info) {
+			if (n < 0)
+				pr_err("writing bitmap file: write failed: %s\n",
+				       strerror(errno));
+			else
+				pr_err("writing bitmap file: short write: %s\n",
+				       strerror(errno));
+			return 1;
+		}
+
+		if (fsync(bitmap_fd) < 0) {
+			pr_err("unable to fsync bitmap file: %s\n",
+			       strerror(errno));
+			return 1;
+		}
+	}
+
+	// tell the kernel about the bitmap file
+	if (ioctl(mdfd, SET_BITMAP_FILE, bitmap_fd) != 0) {
+		pr_err("SET_BITMAP_FILE failed.\n");
+		return 1;
+	}
+
+	return 0;
 }
