@@ -676,7 +676,6 @@ int attempt_re_add(int fd, int tfd, struct mddev_dev *dv,
 		}
 	}
 
-	
 	if ((mdi.disk.state & (1<<MD_DISK_ACTIVE)) &&
 	    !(mdi.disk.state & (1<<MD_DISK_FAULTY)) &&
 	    memcmp(duuid, ouuid, sizeof(ouuid))==0) {
@@ -800,6 +799,15 @@ int attempt_re_add(int fd, int tfd, struct mddev_dev *dv,
 			}
 			free(sra);
 
+			// check that device is not rebuilding
+			if (!(mdi.disk.state & (1<<MD_DISK_SYNC))) {
+				if (verbose >= 0)
+					pr_err("re-add not possible: disk not in sync. fallback to add.\n");
+				close(subarray_fd);
+				// return success here: try normal add
+				return 0;
+			}
+
 			// only allow re-add if a bitmap exists; otherwise we won't synchronize
 			// the new disk correctly
 			struct mdinfo *bitmap_info = sysfs_read(subarray_fd, NULL, GET_BITMAP_LOCATION);
@@ -812,7 +820,7 @@ int attempt_re_add(int fd, int tfd, struct mddev_dev *dv,
 			}
 			if (bitmap_info->bitmap_offset != 1) {
 				if (verbose >= 0)
-					pr_err("failed to re-add to external; no bitmap configured on subarray.\n");
+					pr_err("re-add not possible: no bitmap configured. fallback to add.\n");
 				free(bitmap_info);
 				close(subarray_fd);
 				// return success here: try normal add
