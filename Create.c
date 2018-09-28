@@ -630,10 +630,10 @@ int Create(struct supertype *st, char *mddev,
 	}
 
 	/* Ok, lets try some ioctls */
-
 	info.array.level = s->level;
 	info.array.size = s->size;
 	info.array.raid_disks = s->raiddisks;
+
 	/* The kernel should *know* what md_minor we are dealing
 	 * with, but it chooses to trust me instead. Sigh
 	 */
@@ -883,8 +883,7 @@ int Create(struct supertype *st, char *mddev,
 					inf->disk.state = (1<<MD_DISK_JOURNAL);
 					raid_disk_num--;
 				} else if (inf->disk.raid_disk < s->raiddisks)
-					inf->disk.state = (1<<MD_DISK_ACTIVE) |
-						(1<<MD_DISK_SYNC);
+					inf->disk.state = (1<<MD_DISK_ACTIVE) | (1<<MD_DISK_SYNC);
 				else
 					inf->disk.state = 0;
 

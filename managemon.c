@@ -371,6 +371,7 @@ static void add_disk_to_container(struct supertype *st, struct mdinfo *sd,
 		int super_ok  = 0;
 		int disk_ok   = 0;
 		int bitmap_ok = 0;
+		int state_ok  = 0;
 
 		// try compare to determine if this is old disk from the same array.
 		// Must compare supers (match uuid), have a valid raid disk,
@@ -381,35 +382,23 @@ static void add_disk_to_container(struct supertype *st, struct mdinfo *sd,
 			disk_ok = 1;
 		if (bitmap_info->bitmap_offset == 1)
 			bitmap_ok = 1;
+		if ((new_info.disk.state & (1 << MD_DISK_ACTIVE)) &&
+		    (new_info.disk.state & (1 << MD_DISK_SYNC)) &&
+		   !(new_info.disk.state & (1 << MD_DISK_FAULTY)) &&
+		     new_info.events <= dsk_info.events)
+		    state_ok = 1;
 
-		if (super_ok && disk_ok && bitmap_ok) {
-			// re-add attempt: activate/in-sync/not-faulty
-			if ((new_info.disk.state & (1 << MD_DISK_ACTIVE)) &&
-				(new_info.disk.state & (1 << MD_DISK_SYNC)) &&
-				!(new_info.disk.state & (1 << MD_DISK_FAULTY)) &&
-				new_info.events <= dsk_info.events) {
+		if (super_ok && disk_ok && bitmap_ok && state_ok) {
+			dprintf("re-add OK for %s with %s\n", nm, ent->devnm);
 
-				dprintf("re-add OK for %s with %s\n", nm, ent->devnm);
-
-				// Setting raid_disk and state make this a re-add
-				dk.number    = new_info.disk.number;
-				dk.raid_disk = new_info.disk.raid_disk;
-				dk.state     = new_info.disk.state;
-
-				// fall out of if to add_to_super()
-			} else {
-				/* Looks like a good member of array.
-				 * Just accept it.
-				 * mdadm will incorporate any parts into
-				 * active arrays.
-				 */
-				free_mdstat(ents);
-				return;
-			}
+			// Setting raid_disk and state make this a re-add
+			dk.number    = new_info.disk.number;
+			dk.raid_disk = new_info.disk.raid_disk;
+			dk.state     = new_info.disk.state;
 		} else {
-			dprintf("re-add not possible: [devnm: %s, super: %s, disknum: %s, bitmap: %s, bitmap_offset: %ld]\n",
-					ent->devnm, super_ok ? "OK" : "NO", disk_ok ? "OK" : "NO", bitmap_ok ? "OK" : "NO",
-					bitmap_info->bitmap_offset);
+			dprintf("adding new; re-add not possible: [devnm: %s, super: %s, disknum: %s, bitmap: %s, bitmap_offset: %ld, state: %s]\n",
+					ent->devnm, super_ok ? "OK" : "NO", disk_ok ? "OK" : "NO", bitmap_ok ? "OK" : "NO", bitmap_info->bitmap_offset,
+					state_ok ? "OK" : "NO");
 		}
 		free_mdstat(ents);
 	}

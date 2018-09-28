@@ -2197,6 +2197,30 @@ static void uuid_from_super_ddf(struct supertype *st, int uuid[4])
 		uuid_from_ddf_guid(ddf->anchor.guid, uuid);
 }
 
+int
+getinfo_phys_disk_state(struct phys_disk_entry *pde)
+{
+	int state = 0;
+	if (!pde) {
+		state |= (1 << MD_DISK_FAULTY);
+		return state;
+	}
+
+	// if disk is MISSING or FAILED it is considered FAULTY.
+	// Otherwise if ONLINE, mark as ACTIVE.
+	int stt = be16_to_cpu(pde->state);
+	if ((stt & (DDF_Failed|DDF_Missing|DDF_Online)) == DDF_Online)
+		state |= (1 << MD_DISK_ACTIVE);
+	else
+		state |= (1 << MD_DISK_FAULTY);
+
+	// if disk is ONLINE and is NOT REBUILDING, then mark it IN_SYNC.
+	if ((stt & (DDF_Failed|DDF_Missing|DDF_Rebuilding|DDF_Online)) == DDF_Online)
+		state |= (1 << MD_DISK_SYNC);
+
+	return state;
+}
+
 static void getinfo_super_ddf(struct supertype *st, struct mdinfo *info, char *map)
 {
 	struct ddf_super *ddf = st->sb;
@@ -2232,13 +2256,7 @@ static void getinfo_super_ddf(struct supertype *st, struct mdinfo *info, char *m
 		info->component_size = ddf->dlist->size - info->data_offset;
 		if (info->disk.raid_disk >= 0)
 			pde = ddf->phys->entries + info->disk.raid_disk;
-		if (pde &&
-		    !(be16_to_cpu(pde->state) & DDF_Failed) &&
-		    !(be16_to_cpu(pde->state) & DDF_Missing))
-			info->disk.state = (1 << MD_DISK_SYNC) | (1 << MD_DISK_ACTIVE);
-		else
-			info->disk.state = 1 << MD_DISK_FAULTY;
-
+		info->disk.state = getinfo_phys_disk_state(pde);
 	} else {
 		/* There should always be a dlist, but just in case...*/
 		info->disk.number = -1;
@@ -2341,10 +2359,9 @@ static void getinfo_super_ddf_bvd(struct supertype *st, struct mdinfo *info, cha
 			* be16_to_cpu(conf->prim_elmnt_count);
 		info->disk.number = dl->pdnum;
 		info->disk.state = 0;
-		if (info->disk.number >= 0 &&
-		    (be16_to_cpu(ddf->phys->entries[info->disk.number].state) & DDF_Online) &&
-		    !(be16_to_cpu(ddf->phys->entries[info->disk.number].state) & DDF_Failed))
-			info->disk.state = (1<<MD_DISK_SYNC)|(1<<MD_DISK_ACTIVE);
+
+		if (info->disk.number >= 0)
+			info->disk.state = getinfo_phys_disk_state(&ddf->phys->entries[info->disk.number]);
 		info->events = be32_to_cpu(ddf->active->seq);
 	}
 
@@ -3122,8 +3139,9 @@ static int add_to_super_ddf(struct supertype *st,
 		return 0;
 	}
 
-	dprintf("add_to_super: adding new disk %d %d:%d\n",
-			dk->raid_disk, dk->major, dk->minor);
+	dprintf("add_to_super: adding disk %d %d:%d as (%s)\n",
+			dk->raid_disk, dk->major, dk->minor,
+			dk->raid_disk >= 0 ? "re-add" : "new");
 
 	/* This is device numbered dk->number.  We need to create
 	 * a phys_disk entry and a more detailed disk_data entry.
@@ -3890,6 +3908,7 @@ static int validate_geometry_ddf_bvd(struct supertype *st,
 			pr_err("DDF cannot create a container within an container\n");
 		return 0;
 	}
+
 	/* We must have the container info already read in. */
 	if (!ddf)
 		return 0;
@@ -3987,6 +4006,7 @@ static int load_super_ddf_all(struct supertype *st, int fd,
 	}
 	if (!best)
 		return 1;
+
 	/* OK, load this ddf */
 	sprintf(nm, "%d:%d", best->disk.major, best->disk.minor);
 	dfd = dev_open(nm, O_RDONLY);
@@ -3995,6 +4015,7 @@ static int load_super_ddf_all(struct supertype *st, int fd,
 	load_ddf_headers(dfd, super, NULL);
 	load_ddf_global(dfd, super, NULL);
 	close(dfd);
+
 	/* Now we need the device-local bits */
 	for (sd = sra->devs ; sd ; sd = sd->next) {
 		int rv;
