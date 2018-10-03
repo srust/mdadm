@@ -1324,8 +1324,12 @@ static int load_super_ddf(struct supertype *st, int fd,
 	struct ddf_super *super;
 	int rv;
 
-	if (get_dev_size(fd, devname, &dsize) == 0)
+	if (get_dev_size(fd, devname, &dsize) == 0) {
+		if (devname)
+			pr_err("%s unable to get device size.\n",
+			       devname);
 		return 1;
+	}
 
 #if 0
 	// Removed by Blockbridge
@@ -4951,13 +4955,42 @@ static int ddf_op_complete_devices_enough(struct active_array *a, int working,
 	return 1;
 }
 
-static int ddf_probe_device(struct ddf_super *ddf, struct dl *d)
+static int ddf_probe_device_fd(struct supertype *st, int fd)
 {
-	struct ddf_header *header = &ddf->primary;
-	unsigned long long lba = be64_to_cpu(header->primary_lba);
-	static void *buf = NULL;
-	int fd = d->fd;
+	struct ddf_super   *ddf = st->sb;
+	unsigned long long  lba = 0;
+	static void        *buf = NULL;
+	if (ddf) {
+		struct ddf_header  *header = &ddf->primary;
+		lba = be64_to_cpu(header->primary_lba);
+	}
+
+	// allocate scratch space
+	if (posix_memalign(&buf, 4096, 4096) != 0)
+		goto error;
+
+	if (lseek64(fd, lba<<9, 0) < 0) {
+		pr_err("fd:%d lba:0x%llx lseek64 failed: %m\n", fd, lba);
+		goto error;
+	}
+
+	if (read(fd, buf, 512) < 0) {
+		pr_err("fd:%d lba:0x%llx read failed: %m\n", fd, lba);
+		goto error;
+	}
+
+	return 1;
+
+error:
+	free(buf);
+	return 0;
+}
+
+static int ddf_probe_device(struct supertype *st, struct dl *d)
+{
+	struct ddf_super *ddf = st->sb;
 	unsigned state = be16_to_cpu(ddf->phys->entries[d->pdnum].state);
+	int fd = d->fd;
 
 	dprintf("fd:%d pdnum:%d raiddisk:%d refnum:(%x) "
 		"state:%u %d:%d\n",
@@ -4975,25 +5008,7 @@ static int ddf_probe_device(struct ddf_super *ddf, struct dl *d)
 		return 0;
 	}
 
-	// allocate scratch space
-	if (!buf) {
-		if (posix_memalign(&buf, 4096, 4096) != 0)
-			return 0;
-	}
-
-	fd = d->fd;
-
-	if (lseek64(fd, lba<<9, 0) < 0) {
-		pr_err("fd:%d lba:0x%llx lseek64 failed: %m\n", fd, lba);
-		return 0;
-	}
-
-	if (read(fd, buf, 512) < 0) {
-		pr_err("fd:%d lba:0x%llx read failed: %m\n", fd, lba);
-		return 0;
-	}
-
-	return 1;
+	return ddf_probe_device_fd(st, fd);
 }
 
 static int ddf_probe_devices(struct active_array *a)
@@ -5006,7 +5021,7 @@ static int ddf_probe_devices(struct active_array *a)
 	pr_state(ddf, __func__);
 
 	for (d = ddf->dlist; d; d=d->next) {
-		int ok = ddf_probe_device(ddf, d);
+		int ok = ddf_probe_device(st, d);
 		working += ok;
 		d->op_ok = ok;
 	}
@@ -6014,6 +6029,7 @@ struct superswitch super_ddf = {
 	.prepare_update	  = ddf_prepare_update,
 	.activate_spare	  = ddf_activate_spare,
 	.probe_devices	  = ddf_probe_devices,
+	.probe_device_fd  = ddf_probe_device_fd,
 	.get_assembly_seq = ddf_get_assembly_seq,
 	.get_member_seq	  = ddf_get_member_seq,
 #endif

@@ -1077,6 +1077,9 @@ extern struct superswitch {
 	/* return nonzero if enough devices are readable */
 	int (*probe_devices)(struct active_array *a);
 
+	/* return nonzero if device fd is readable */
+	int (*probe_device_fd)(struct supertype *st, int fd);
+
     /* return external minimum assembly sequence number */
 	int64_t (*get_assembly_seq)(struct supertype *st);
 

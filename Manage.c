@@ -999,7 +999,14 @@ int Manage_add(int fd, int tfd, struct mddev_dev *dv,
 		 * simply re-add it.
 		 */
 		dev_st = dup_super(tst);
-		dev_st->ss->load_super(dev_st, tfd, NULL);
+		dev_st->ss->load_super(dev_st, tfd, verbose > 0 ? dv->devname : NULL);
+
+		if (!dev_st->ss->probe_device_fd(dev_st, tfd)) {
+			pr_err("Cannot add device %s to %s: device is OFFLINE.\n",
+				   dv->devname, devname);
+			return -1;
+		}
+
 		if (dev_st->sb && dv->disposition != 'S') {
 			int rv;
 
