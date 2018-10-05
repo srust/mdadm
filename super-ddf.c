@@ -3520,6 +3520,7 @@ static int __write_init_super_ddf(struct supertype *st, int *enough_out)
 	int successes = 0;
 	int enough = 0;
 	int not_all;
+	__u16 state;
 
 	pr_state(ddf, __func__);
 
@@ -3528,8 +3529,18 @@ static int __write_init_super_ddf(struct supertype *st, int *enough_out)
 	 * "op_ok".
 	 */
 	for (d = ddf->dlist; d; d=d->next) {
-		int ok = _write_super_to_disk(ddf, d);
 		attempts++;
+		state = be16_to_cpu(ddf->phys->entries[d->pdnum].state);
+		if (state & DDF_Failed) {
+			dprintf("skipping failed device: "
+				"fd:%d pdnum:%d raiddisk:%d refnum:(%x) "
+				"state:%u %d:%d\n",
+				d->fd, d->pdnum, d->raiddisk,
+				be32_to_cpu(d->disk.refnum),
+				state, d->major, d->minor);
+			continue;
+		}
+		int ok = _write_super_to_disk(ddf, d);
 		successes += ok;
 		d->op_ok = ok;
 	}
