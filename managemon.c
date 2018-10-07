@@ -417,6 +417,11 @@ static void add_disk_to_container(struct supertype *st, struct mdinfo *sd,
 					"exiting!\n", __FUNCTION__);
 				exit(1);
 			}
+
+			if (!a->container->ss->probe_device_fd(a->container, dfd)) {
+				dprintf("add failed for %s: device is OFFLINE\n", nm);
+				return;
+			}
 		}
 	}
 
