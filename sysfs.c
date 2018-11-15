@@ -105,7 +105,7 @@ struct mdinfo *sysfs_read(int fd, char *devnm, unsigned long options)
 	char buf[PATH_MAX];
 	char *base;
 	char *dbase;
-	struct mdinfo *sra;
+	struct mdinfo *sra = NULL;
 	struct mdinfo *dev, **devp;
 	DIR *dir = NULL;
 	struct dirent *de;

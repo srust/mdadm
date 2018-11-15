@@ -1792,7 +1792,7 @@ static unsigned int get_vd_num_of_subarray(struct supertype *st)
 	 * and DDF_NOTFOUND on error.
 	 */
 	struct ddf_super *ddf = st->sb;
-	struct mdinfo *sra;
+	struct mdinfo *sra = NULL;
 	char *sub, *end;
 	unsigned int vcnum;
 
@@ -1803,16 +1803,21 @@ static unsigned int get_vd_num_of_subarray(struct supertype *st)
 	if (!sra || sra->array.major_version != -1 ||
 	    sra->array.minor_version != -2 ||
 	    !is_subarray(sra->text_version))
-		return DDF_NOTFOUND;
+		goto notfound;
 
 	sub = strchr(sra->text_version + 1, '/');
 	if (sub != NULL)
 		vcnum = strtoul(sub + 1, &end, 10);
 	if (sub == NULL || *sub == '\0' || *end != '\0' ||
 	    vcnum >= be16_to_cpu(ddf->active->max_vd_entries))
-		return DDF_NOTFOUND;
+		goto notfound;
 
+	sysfs_free(sra);
 	return vcnum;
+
+notfound:
+	sysfs_free(sra);
+	return DDF_NOTFOUND;
 }
 
 static void brief_examine_super_ddf(struct supertype *st, int verbose)
@@ -3751,7 +3756,7 @@ static int validate_geometry_ddf(struct supertype *st,
 				 int verbose)
 {
 	int fd;
-	struct mdinfo *sra;
+	struct mdinfo *sra = NULL;
 	int cfd;
 
 	/* ddf potentially supports lots of things, but it depends on
@@ -3849,6 +3854,8 @@ static int validate_geometry_ddf(struct supertype *st,
 	close(fd);
 	if (sra && sra->array.major_version == -1 &&
 	    strcmp(sra->text_version, "ddf") == 0) {
+		sysfs_free(sra);
+
 		/* This is a member of a ddf container.  Load the container
 		 * and try to create a bvd
 		 */
@@ -3865,6 +3872,7 @@ static int validate_geometry_ddf(struct supertype *st,
 		}
 		close(cfd);
 	} else /* device may belong to a different container */
+		sysfs_free(sra);
 		return 0;
 
 	return 1;
@@ -3975,7 +3983,7 @@ static int validate_geometry_ddf_bvd(struct supertype *st,
 static int load_super_ddf_all(struct supertype *st, int fd,
 			      void **sbp, char *devname)
 {
-	struct mdinfo *sra;
+	struct mdinfo *sra = NULL;
 	struct ddf_super *super;
 	struct mdinfo *sd, *best = NULL;
 	int bestseq = 0;
@@ -3987,14 +3995,14 @@ static int load_super_ddf_all(struct supertype *st, int fd,
 
 	sra = sysfs_read(fd, 0, GET_LEVEL|GET_VERSION|GET_DEVS|GET_STATE);
 	if (!sra)
-		return 1;
+		goto error;
 	if (sra->array.major_version != -1 ||
 	    sra->array.minor_version != -2 ||
 	    strcmp(sra->text_version, "ddf") != 0)
-		return 1;
+		goto error;
 
 	if (posix_memalign((void**)&super, 512, sizeof(*super)) != 0)
-		return 1;
+		goto error;
 	memset(super, 0, sizeof(*super));
 
 	/* first, try each device, and choose the best ddf */
@@ -4020,13 +4028,13 @@ static int load_super_ddf_all(struct supertype *st, int fd,
 		}
 	}
 	if (!best)
-		return 1;
+		goto error;
 
 	/* OK, load this ddf */
 	sprintf(nm, "%d:%d", best->disk.major, best->disk.minor);
 	dfd = dev_open(nm, O_RDONLY);
 	if (dfd < 0)
-		return 1;
+		goto error;
 	load_ddf_headers(dfd, super, NULL);
 	load_ddf_global(dfd, super, NULL);
 	close(dfd);
@@ -4059,7 +4067,12 @@ static int load_super_ddf_all(struct supertype *st, int fd,
 		st->max_devs = 512;
 	}
 	strcpy(st->container_devnm, fd2devnm(fd));
+	sysfs_free(sra);
 	return 0;
+
+error:
+	sysfs_free(sra);
+	return 1;
 }
 
 static int load_container_ddf(struct supertype *st, int fd,
@@ -4977,8 +4990,10 @@ static int ddf_probe_device_fd(struct supertype *st, int fd)
 	}
 
 	// allocate scratch space
-	if (posix_memalign(&buf, 4096, 4096) != 0)
-		goto error;
+	if (!buf) {
+		if (posix_memalign(&buf, 4096, 4096) != 0)
+			goto error;
+	}
 
 	if (lseek64(fd, lba<<9, 0) < 0) {
 		pr_err("fd:%d lba:0x%llx lseek64 failed: %m\n", fd, lba);
@@ -4993,7 +5008,6 @@ static int ddf_probe_device_fd(struct supertype *st, int fd)
 	return 1;
 
 error:
-	free(buf);
 	return 0;
 }
 
@@ -5003,9 +5017,9 @@ static int ddf_probe_device(struct supertype *st, struct dl *d)
 	unsigned state = be16_to_cpu(ddf->phys->entries[d->pdnum].state);
 	int fd = d->fd;
 
-	dprintf("fd:%d pdnum:%d raiddisk:%d refnum:(%x) "
+	dprintf("fd:%d pdnum:%d refnum:(%x) "
 		"state:%u %d:%d\n",
-		d->fd, d->pdnum, d->raiddisk,
+		d->fd, d->pdnum,
 		be32_to_cpu(d->disk.refnum),
 		state, d->major, d->minor);
 
