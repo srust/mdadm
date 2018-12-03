@@ -1015,6 +1015,11 @@ extern struct superswitch {
 	 */
 	int (*set_array_state)(struct active_array *a, int consistent);
 
+	/*
+	 * Update array "state". The virtual subarray state.
+	 */
+	int (*update_state)(struct supertype *st);
+
 	/* When the state of a device might have changed, we call set_disk to
 	 * tell the metadata what the current state is.
 	 * Typically this happens on spare->in_sync and (spare|in_sync)->faulty

@@ -464,7 +464,7 @@ static int read_and_act(struct active_array *a, fd_set *fds)
 	}
 
 	gettimeofday(&tv, NULL);
-	dprintf("(%d): %ld.%06ld state:%s prev:%s action:%s prev: %s start:%llu\n",
+	dprintf("array%d: %ld.%06ld state:%s prev_state:%s action:%s prev_action:%s resync_start:%llu\n",
 		a->info.container_member,
 		tv.tv_sec, tv.tv_usec,
 		array_states[a->curr_state],
@@ -541,6 +541,7 @@ static int read_and_act(struct active_array *a, fd_set *fds)
 						   mdi->curr_state);
 			if (! (mdi->curr_state & DS_INSYNC))
 				check_degraded = 1;
+			a->container->ss->update_state(a->container);
 			count++;
 		}
 		if (count != a->info.array.raid_disks)
@@ -572,6 +573,7 @@ static int read_and_act(struct active_array *a, fd_set *fds)
 			dprintf("curr_state: FAULTY disk: %d\n", mdi->disk.number);
 			a->container->ss->set_disk(a, mdi->disk.raid_disk,
 						   mdi->curr_state);
+			a->container->ss->update_state(a->container);
 			check_degraded = 1;
 			if (mdi->curr_state & DS_BLOCKED) {
 				dprintf("FAULTY disk is DS_BLOCKED: %d\n",
@@ -660,8 +662,10 @@ static int read_and_act(struct active_array *a, fd_set *fds)
                 }
         }
 
-        dprintf("(%d): state:%s action:%s next(", a->info.container_member,
-                array_states[a->curr_state], sync_actions[a->curr_action]);
+        dprintf("array%d: state:%s action:%s next(",
+		a->info.container_member,
+                array_states[a->curr_state],
+                sync_actions[a->curr_action]);
 
 	/* Effect state changes in the array */
 	if (a->next_state != bad_word) {

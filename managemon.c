@@ -299,6 +299,7 @@ static void remove_disk_from_container(struct supertype *st, struct mdinfo *sd)
 
 	st->update_tail = &update;
 	st->ss->remove_from_super(st, &dk);
+	st->ss->update_state(st);
 
 	/* FIXME this write_init_super shouldn't be here.
 	 * We have it after add_to_super to write to new device,
@@ -430,6 +431,7 @@ static void add_disk_to_container(struct supertype *st, struct mdinfo *sd,
 	// add or re-add
 	st->update_tail = &update;
 	st->ss->add_to_super(st, &dk, dfd, NULL, INVALID_SECTORS);
+	st->ss->update_state(st);
 	st->ss->write_init_super(st);
 	queue_metadata_update(update);
 	st->update_tail = NULL;

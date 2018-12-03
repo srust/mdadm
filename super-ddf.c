@@ -562,7 +562,8 @@ static int ddf_del_assembly_seq(struct supertype *st);
 static int ddf_del_member_seq(struct supertype *st);
 static int ddf_op_complete_devices_enough(struct active_array *a, int working,
 					  const char *op_type);
-
+static mapping_t ddf_state[];
+static mapping_t ddf_init_state[];
 
 #if DEBUG
 static void pr_state(struct ddf_super *ddf, const char *msg)
@@ -572,9 +573,9 @@ static void pr_state(struct ddf_super *ddf, const char *msg)
 	for (i = 0; i < be16_to_cpu(ddf->active->max_vd_entries); i++) {
 		if (all_ff(ddf->virt->entries[i].guid))
 			continue;
-		dprintf_cont("%u(s=%02x i=%02x) ", i,
-			ddf->virt->entries[i].state,
-			ddf->virt->entries[i].init_state);
+		dprintf_cont("array%u (state=%s init_state=%s) ", i,
+			map_num(ddf_state, (ddf->virt->entries[i].state & DDF_state_mask)),
+			map_num(ddf_init_state, (ddf->virt->entries[i].init_state & DDF_initstate_mask)));
 	}
 	dprintf_cont("\n");
 }
@@ -1654,11 +1655,11 @@ static void examine_vds(struct ddf_super *sb)
 		printf("\n");
 		printf("         unit[%d] : %d\n", i, be16_to_cpu(ve->unit));
 		printf("        state[%d] : %s, %s%s\n", i,
-		       map_num(ddf_state, ve->state & 7),
+		       map_num(ddf_state, (ve->state & DDF_state_mask)),
 		       (ve->state & DDF_state_morphing) ? "Morphing, ": "",
 		       (ve->state & DDF_state_inconsistent)? "Not Consistent" : "Consistent");
 		printf("   init state[%d] : %s\n", i,
-		       map_num(ddf_init_state, ve->init_state&DDF_initstate_mask));
+		       map_num(ddf_init_state, (ve->init_state & DDF_initstate_mask)));
 		printf("       access[%d] : %s\n", i,
 		       map_num(ddf_access, (ve->init_state & DDF_access_mask) >> 6));
 		printf("         Name[%d] : %.16s\n", i, ve->name);
@@ -1712,9 +1713,10 @@ static void examine_pds(struct ddf_super *sb)
 		       (type&8) ? "spare" : "",
 		       (type&16)? ", foreign" : "",
 		       (type&32)? "pass-through" : "");
-		if (state & DDF_Failed)
+		if (state & DDF_Failed) {
 			/* This over-rides these three */
 			state &= ~(DDF_Online|DDF_Rebuilding|DDF_Transition);
+		}
 		printf("/%s%s%s%s%s%s%s",
 		       (state&1)? "Online": "Offline",
 		       (state&2)? ", Failed": "",
@@ -2382,9 +2384,7 @@ static void getinfo_super_ddf_bvd(struct supertype *st, struct mdinfo *info, cha
 	info->recovery_blocked = 0;
 	if (!(ddf->virt->entries[info->container_member].state
 	      & DDF_state_inconsistent)  &&
-	    (ddf->virt->entries[info->container_member].init_state
-	     & DDF_initstate_mask)
-	    == DDF_init_full)
+	    (ddf->virt->entries[info->container_member].init_state & DDF_initstate_mask) == DDF_init_full)
 		info->resync_start = MaxSector;
 
 	uuid_from_super_ddf(st, info->uuid);
@@ -2404,8 +2404,7 @@ static void getinfo_super_ddf_bvd(struct supertype *st, struct mdinfo *info, cha
 			if (j <  info->array.raid_disks) {
 				int i = find_phys(ddf, vc->conf.phys_refnum[j]);
 				if (i >= 0 &&
-				    (be16_to_cpu(ddf->phys->entries[i].state)
-				     & DDF_Online) &&
+				    (be16_to_cpu(ddf->phys->entries[i].state) & DDF_Online) &&
 				    !(be16_to_cpu(ddf->phys->entries[i].state)
 				      & DDF_Failed))
 					map[i] = 1;
@@ -3148,9 +3147,9 @@ static int add_to_super_ddf(struct supertype *st,
 		return 0;
 	}
 
-	dprintf("add_to_super: adding disk %d %d:%d as (%s)\n",
-			dk->raid_disk, dk->major, dk->minor,
-			dk->raid_disk >= 0 ? "re-add" : "new");
+	dprintf("add_to_super: adding disk %d %d:%d %s\n",
+		dk->raid_disk, dk->major, dk->minor,
+		dk->raid_disk == -1 ? "(new)" : "");
 
 	/* This is device numbered dk->number.  We need to create
 	 * a phys_disk entry and a more detailed disk_data entry.
@@ -4241,8 +4240,7 @@ static struct mdinfo *container_content_ddf(struct supertype *st, char *subarray
 
 		i = vc->vcnum;
 		if ((ddf->virt->entries[i].state & DDF_state_inconsistent) ||
-		    (ddf->virt->entries[i].init_state & DDF_initstate_mask) !=
-		    DDF_init_full) {
+		    (ddf->virt->entries[i].init_state & DDF_initstate_mask) != DDF_init_full) {
 			this->array.state = 0;
 			this->resync_start = 0;
 		} else {
@@ -4275,8 +4273,7 @@ static struct mdinfo *container_content_ddf(struct supertype *st, char *subarray
 				continue;
 
 			stt = be16_to_cpu(ddf->phys->entries[pd].state);
-			if ((stt & (DDF_Online|DDF_Failed|DDF_Rebuilding))
-			    != DDF_Online)
+			if ((stt & (DDF_Online|DDF_Failed|DDF_Rebuilding)) != DDF_Online)
 				continue;
 
 			i = get_pd_index_from_refnum(
@@ -4565,7 +4562,6 @@ static void handle_missing(struct ddf_super *ddf, struct active_array *a, int in
 	for (n = 0; ; n++) {
 		vc = find_vdcr(ddf, inst, n, &n_bvd, &vcl);
 		if (!vc) {
-			dprintf("handle_missing: no vc\n");
 			break;
 		}
 		dprintf("handle_missing: phys_refnum %08x\n",
@@ -4575,7 +4571,7 @@ static void handle_missing(struct ddf_super *ddf, struct active_array *a, int in
 				break;
 		if (dl) {
 			/* Found this disk, so not missing */
-			dprintf("handle_missing: disk found not missing %08x\n",
+			dprintf("handle_missing: disk found %08x\n",
 					be32_to_cpu(dl->disk.refnum));
 			continue;
 		}
@@ -4610,6 +4606,48 @@ static void handle_missing(struct ddf_super *ddf, struct active_array *a, int in
 	}
 }
 
+const char *
+array_state_str(enum array_state s)
+{
+	const char *str = NULL;
+	switch (s) {
+	case clear:
+		str = "clear";
+		break;
+	case inactive:
+		str = "inactive";
+		break;
+	case suspended:
+		str = "suspended";
+		break;
+	case readonly:
+		str = "readonly";
+		break;
+	case read_auto:
+		str = "read_auto";
+		break;
+	case clean:
+		str = "clean";
+		break;
+	case active:
+		str = "active";
+		break;
+	case write_pending:
+		str = "write_pending";
+		break;
+	case active_idle:
+		str = "active_idle";
+		break;
+	case bad_word:
+		str = "bad_word";
+		break;
+	default:
+		str = "unknown";
+		break;
+	}
+	return str;
+}
+
 /*
  * The array 'a' is to be marked clean in the metadata.
  * If '->resync_start' is not ~(unsigned long long)0, then the array is only
@@ -4629,7 +4667,7 @@ static int ddf_set_array_state(struct active_array *a, int consistent)
 	//
 	// Flush assembly sequence numbers on initial transition from a
 	// readonly mode to read/write.
-    if ((a->curr_state == write_pending || a->curr_state == active) &&
+	if ((a->curr_state == write_pending || a->curr_state == active) &&
 	    (a->prev_state == read_auto     || a->prev_state == readonly)) {
 		ddf_set_update_assembly_seq(ddf);
 	}
@@ -4658,11 +4696,66 @@ static int ddf_set_array_state(struct active_array *a, int consistent)
 	if (old != ddf->virt->entries[inst].init_state)
 		ddf_set_updates_pending(ddf, NULL);
 
-	dprintf("ddf mark %d/%s (%d) %s %llu\n", inst,
-		guid_str(ddf->virt->entries[inst].guid), a->curr_state,
+	dprintf("ddf mark array%d guid:%s state:%s init_state:%s curr_state:%s:%d consistency:%s resync_start:%llu\n",
+		inst,
+		guid_str(ddf->virt->entries[inst].guid),
+		map_num(ddf_state, (ddf->virt->entries[inst].state & DDF_state_mask)),
+		map_num(ddf_init_state, (ddf->virt->entries[inst].init_state & DDF_initstate_mask)),
+		array_state_str(a->curr_state), a->curr_state,
 		consistent?"clean":"dirty",
 		a->info.resync_start);
 	return consistent;
+}
+
+/*
+ * ddf_update_state() Blockbridge
+ *
+ * This function retrieves the current array secondary state, for the
+ * first sub-array, and updates it if needed. In Blockbridge, only one
+ * subarray is ever possible, so these values are hard-coded here:
+ *
+ *	find_vdcr(ddf, 0, 0, ...)
+ *
+ * The second argument "0" is the first subarray. The third argument
+ * "0" is the first raid disk. We only need to get "any" vcl here. So
+ * this is always valid.
+ *
+ * Once the vcl is available, we check the state, compare it against
+ * the persistent state value. And schedule a metadata update if the
+ * current state is not reflected in the persistent state.
+ *
+ * When paired with array membership changes, calling this function
+ * ensures correct persistent "degraded" state, when necessary.
+ */
+static int
+ddf_update_state(struct supertype *st)
+{
+	struct ddf_super *ddf = st->sb;
+	unsigned int n_bvd;
+	struct vcl *vcl = NULL;
+	struct vd_config *vc = find_vdcr(ddf, 0, 0, &n_bvd, &vcl);
+	int state, old, upp;
+	if (!vc || !vcl)
+		return 1;
+
+	/* Now we need to check the state of the array and update
+	 * virtual_disk.entries[n].state.
+	 * It needs to be one of "optimal", "degraded", "failed".
+	 * I don't understand 'deleted' or 'missing'.
+	 */
+	state = get_svd_state(ddf, vcl);
+	old = (ddf->virt->entries[0].state & DDF_state_mask);
+	upp = (ddf->virt->entries[0].state & ~DDF_state_mask);
+
+	if (old != state) {
+		dprintf("updating state from %s -> %s\n",
+			map_num(ddf_state, old),
+			map_num(ddf_state, state));
+		ddf->virt->entries[0].state = upp | state;
+		ddf_set_updates_pending(ddf, vc);
+	}
+
+	return 0;
 }
 
 static int bvd_op_device_online(const struct ddf_super *ddf, int pd)
@@ -4707,13 +4800,13 @@ static int get_bvd_state(const struct ddf_super *ddf,
 				dprintf("i:%d pd:%d %s OFFLINE\n", i, pd, op_type);
 				continue;
 			}
-			else 
+			else {
 				dprintf("i:%d pd:%d %s online\n", i, pd, op_type);
+			}
 		}
-		
+
 		st = be16_to_cpu(ddf->phys->entries[pd].state);
-		if ((st & (DDF_Online|DDF_Failed|DDF_Rebuilding))
-		    == DDF_Online) {
+		if ((st & (DDF_Online|DDF_Failed|DDF_Rebuilding)) == DDF_Online) {
 			working++;
 			avail[i] = 1;
 		}
@@ -4821,6 +4914,7 @@ static void ddf_set_disk(struct active_array *a, int n, int state)
 		dprintf("ddf: cannot find instance %d!!\n", inst);
 		return;
 	}
+
 	/* Find the matching slot in 'info'. */
 	for (mdi = a->info.devs; mdi; mdi = mdi->next)
 		if (mdi->disk.raid_disk == n)
@@ -4867,13 +4961,10 @@ static void ddf_set_disk(struct active_array *a, int n, int state)
 	} else {
 		be16 old = ddf->phys->entries[pd].state;
 		if (state & DS_FAULTY)
-			be16_set(ddf->phys->entries[pd].state,
-				 cpu_to_be16(DDF_Failed));
+			be16_set(ddf->phys->entries[pd].state, cpu_to_be16(DDF_Failed));
 		if (state & DS_INSYNC) {
-			be16_set(ddf->phys->entries[pd].state,
-				 cpu_to_be16(DDF_Online));
-			be16_clear(ddf->phys->entries[pd].state,
-				   cpu_to_be16(DDF_Rebuilding));
+			be16_set(ddf->phys->entries[pd].state, cpu_to_be16(DDF_Online));
+			be16_clear(ddf->phys->entries[pd].state, cpu_to_be16(DDF_Rebuilding));
 		}
 		if (!be16_eq(old, ddf->phys->entries[pd].state)) {
 			update = 1;
@@ -5011,6 +5102,35 @@ error:
 	return 0;
 }
 
+static const char *
+ddf_device_state_str(unsigned state)
+{
+	const char *str = NULL;
+
+	switch (state & DDF_state_mask) {
+	case 0:
+		str = "offline";
+		break;
+	case DDF_Online:
+		str = "online";
+		break;
+	case DDF_Failed:
+		str = "failed";
+		break;
+	case DDF_Rebuilding:
+		str = "rebuilding";
+		break;
+	case DDF_Missing:
+		str = "missing";
+		break;
+	default:
+		str = "unknown";
+		break;
+	}
+
+	return str;
+}
+
 static int ddf_probe_device(struct supertype *st, struct dl *d)
 {
 	struct ddf_super *ddf = st->sb;
@@ -5018,9 +5138,10 @@ static int ddf_probe_device(struct supertype *st, struct dl *d)
 	int fd = d->fd;
 
 	dprintf("fd:%d pdnum:%d refnum:(%x) "
-		"state:%u %d:%d\n",
+		"state:%s:%u %d:%d\n",
 		d->fd, d->pdnum,
 		be32_to_cpu(d->disk.refnum),
+		ddf_device_state_str(state),
 		state, d->major, d->minor);
 
 	if ((state & (DDF_Failed|DDF_Rebuilding|DDF_Missing))) {
@@ -5240,10 +5361,10 @@ static void ddf_process_virt_update(struct supertype *st,
 			cpu_to_be16(
 				1 + be16_to_cpu(
 					ddf->virt->populated_vdes));
-		dprintf("added VD %s in slot %d(s=%02x i=%02x)\n",
-			guid_str(vd->entries[0].guid), ent,
-			ddf->virt->entries[ent].state,
-			ddf->virt->entries[ent].init_state);
+		dprintf("added array%u VD %s (state=%s initstate=%s)\n",
+			ent, guid_str(vd->entries[0].guid),
+			map_num(ddf_state, (ddf->virt->entries[ent].state & DDF_state_mask)),
+			map_num(ddf_init_state, (ddf->virt->entries[ent].init_state & DDF_initstate_mask)));
 	}
 	ddf_set_updates_pending(ddf, NULL);
 }
@@ -5356,8 +5477,7 @@ static void ddf_update_vlist(struct ddf_super *ddf, struct dl *dl)
 			if (in_degraded) {
 				dprintf("update_vlist: setting Rebuilding on %08x\n",
 						be32_to_cpu(ddf->phys->entries[dl->pdnum].refnum));
-				be16_set(ddf->phys->entries[dl->pdnum].state,
-					 cpu_to_be16(DDF_Rebuilding));
+				be16_set(ddf->phys->entries[dl->pdnum].state, cpu_to_be16(DDF_Rebuilding));
 			}
 		}
 	}
@@ -5448,12 +5568,9 @@ static void ddf_process_conf_update(struct supertype *st,
 	/* Set DDF_Transition on all Failed devices - to help
 	 * us detect those that are no longer in use.
 	 */
-	for (pdnum = 0; pdnum < be16_to_cpu(ddf->phys->max_pdes);
-	     pdnum++) {
-		if (be16_and(ddf->phys->entries[pdnum].state,
-			     cpu_to_be16(DDF_Failed)))
-			be16_set(ddf->phys->entries[pdnum].state,
-				 cpu_to_be16(DDF_Transition));
+	for (pdnum = 0; pdnum < be16_to_cpu(ddf->phys->max_pdes); pdnum++) {
+		if (be16_and(ddf->phys->entries[pdnum].state, cpu_to_be16(DDF_Failed)))
+			be16_set(ddf->phys->entries[pdnum].state, cpu_to_be16(DDF_Transition));
 	}
 
 	/* Now make sure vlist is correct for each dl. */
@@ -5706,10 +5823,8 @@ static struct mdinfo *ddf_activate_spare(struct active_array *a,
 			if (dl->pdnum < 0)
 				continue;
 			state = ddf->phys->entries[dl->pdnum].state;
-			if (be16_and(state,
-				     cpu_to_be16(DDF_Failed|DDF_Missing)) ||
-			    !be16_and(state,
-				      cpu_to_be16(DDF_Online)))
+			if (be16_and(state, cpu_to_be16(DDF_Failed|DDF_Missing)) ||
+			   !be16_and(state, cpu_to_be16(DDF_Online)))
 				continue;
 
 			/* If in this array, skip */
@@ -6048,6 +6163,7 @@ struct superswitch super_ddf = {
 /* for mdmon */
 	.open_new	  = ddf_open_new,
 	.set_array_state  = ddf_set_array_state,
+	.update_state     = ddf_update_state,
 	.set_disk	  = ddf_set_disk,
 	.sync_metadata	  = ddf_sync_metadata,
 	.process_update	  = ddf_process_update,
