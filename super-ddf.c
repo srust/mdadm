@@ -2297,8 +2297,7 @@ static void getinfo_super_ddf(struct supertype *st, struct mdinfo *info, char *m
 			       be32_to_cpu(ddf->phys->entries[e].refnum) == 0xffffffff)
 				e++;
 			if (i < info->array.raid_disks && e < max &&
-			    !(be16_to_cpu(ddf->phys->entries[e].state)
-			      & DDF_Failed))
+			    !(be16_to_cpu(ddf->phys->entries[e].state) & (DDF_Failed|DDF_Missing)))
 				map[i] = 1;
 			else
 				map[i] = 0;
@@ -2405,8 +2404,7 @@ static void getinfo_super_ddf_bvd(struct supertype *st, struct mdinfo *info, cha
 				int i = find_phys(ddf, vc->conf.phys_refnum[j]);
 				if (i >= 0 &&
 				    (be16_to_cpu(ddf->phys->entries[i].state) & DDF_Online) &&
-				    !(be16_to_cpu(ddf->phys->entries[i].state)
-				      & DDF_Failed))
+				    !(be16_to_cpu(ddf->phys->entries[i].state) & (DDF_Failed|DDF_Missing)))
 					map[i] = 1;
 			}
 		}
@@ -3307,6 +3305,7 @@ static int remove_from_super_ddf(struct supertype *st, mdu_disk_info_t *dk)
 		pd->magic = DDF_PHYS_RECORDS_MAGIC;
 		pd->used_pdes = cpu_to_be16(dl->pdnum);
 		pd->entries[0].state = cpu_to_be16(DDF_Missing);
+		pd->entries[0].refnum = dl->disk.refnum;
 		append_metadata_update(st, pd, len);
 	}
 	return 0;
@@ -3535,10 +3534,17 @@ static int __write_init_super_ddf(struct supertype *st, int *enough_out)
 	for (d = ddf->dlist; d; d=d->next) {
 		attempts++;
 		state = be16_to_cpu(ddf->phys->entries[d->pdnum].state);
-		if (state & DDF_Failed) {
-			dprintf("skipping failed device: "
+		if (state & (DDF_Failed|DDF_Missing)) {
+			char *desc = "";
+			if (state & DDF_Failed)
+				desc = "failed";
+			else if (state & DDF_Missing)
+				desc = "missing";
+
+			dprintf("skipping %s device: "
 				"fd:%d pdnum:%d raiddisk:%d refnum:(%x) "
 				"state:%u %d:%d\n",
+				desc,
 				d->fd, d->pdnum, d->raiddisk,
 				be32_to_cpu(d->disk.refnum),
 				state, d->major, d->minor);
@@ -4273,7 +4279,7 @@ static struct mdinfo *container_content_ddf(struct supertype *st, char *subarray
 				continue;
 
 			stt = be16_to_cpu(ddf->phys->entries[pd].state);
-			if ((stt & (DDF_Online|DDF_Failed|DDF_Rebuilding)) != DDF_Online)
+			if ((stt & (DDF_Online|DDF_Failed|DDF_Missing|DDF_Rebuilding)) != DDF_Online)
 				continue;
 
 			i = get_pd_index_from_refnum(
@@ -4806,7 +4812,7 @@ static int get_bvd_state(const struct ddf_super *ddf,
 		}
 
 		st = be16_to_cpu(ddf->phys->entries[pd].state);
-		if ((st & (DDF_Online|DDF_Failed|DDF_Rebuilding)) == DDF_Online) {
+		if ((st & (DDF_Online|DDF_Failed|DDF_Missing|DDF_Rebuilding)) == DDF_Online) {
 			working++;
 			avail[i] = 1;
 		}
@@ -5294,8 +5300,10 @@ static void ddf_process_phys_update(struct supertype *st,
 		dprintf("phys_update: removing disk %08x\n",
 				be32_to_cpu(pd->entries[0].refnum));
 		/* removing this disk. */
+		be16_clear(ddf->phys->entries[ent].state,
+			   cpu_to_be16(DDF_Online));
 		be16_set(ddf->phys->entries[ent].state,
-			 cpu_to_be16(DDF_Missing));
+			 cpu_to_be16(DDF_Failed|DDF_Missing));
 		for (dlp = &ddf->dlist; *dlp; dlp = &(*dlp)->next) {
 			struct dl *dl = *dlp;
 			if (dl->pdnum == (signed)ent) {
@@ -5399,14 +5407,14 @@ static void ddf_remove_failed(struct ddf_super *ddf)
 			for (dl = ddf->dlist; dl; dl = dl->next)
 				if (dl->pdnum == (int)pdnum) {
 					dprintf("-> keeping conf update for %u (%08x)\n",
-							pdnum,
-							be32_to_cpu(ddf->phys->entries[pdnum].refnum));
+						pdnum,
+						be32_to_cpu(ddf->phys->entries[pdnum].refnum));
 					break;
 				}
 			if (!dl) {
 				dprintf("-> skipping conf update for %u (%08x)\n",
-						pdnum,
-						be32_to_cpu(ddf->phys->entries[pdnum].refnum));
+					pdnum,
+					be32_to_cpu(ddf->phys->entries[pdnum].refnum));
 				continue;
 			}
 		}
@@ -5847,9 +5855,7 @@ static struct mdinfo *ddf_activate_spare(struct active_array *a,
 						/* check spare_ents for guid */
 						unsigned int j;
 						for (j = 0 ;
-						     j < be16_to_cpu
-							     (dl->spare
-							      ->populated);
+						     j < be16_to_cpu(dl->spare->populated);
 						     j++) {
 							if (memcmp(dl->spare->spare_ents[j].guid,
 								   ddf->virt->entries[a->info.container_member].guid,
@@ -5862,14 +5868,12 @@ static struct mdinfo *ddf_activate_spare(struct active_array *a,
 			} else if (be16_and(ddf->phys->entries[dl->pdnum].type,
 					    cpu_to_be16(DDF_Global_Spare))) {
 				is_global = 1;
-			} else if (!be16_and(ddf->phys
-					     ->entries[dl->pdnum].state,
-					     cpu_to_be16(DDF_Failed))) {
+			} else if (!be16_and(ddf->phys->entries[dl->pdnum].state,
+					     cpu_to_be16(DDF_Failed|DDF_Missing))) {
 				/* we can possibly use some of this */
 				is_global = 1;
 			}
-			if ( ! (is_dedicated ||
-				(is_global && global_ok))) {
+			if (! (is_dedicated || (is_global && global_ok))) {
 				dprintf("%d:%d not suitable: %d %d\n", dl->major, dl->minor,
 					is_dedicated, is_global);
 				continue;
