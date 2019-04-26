@@ -249,16 +249,21 @@ int Detail(char *dev, struct context *c)
 
 		if (st && st->sb && info) {
 			char nbuf[64];
-			struct map_ent *mp, *map = NULL;
-
 			fname_from_uuid(st, info, nbuf, ':');
 			printf("MD_UUID=%s\n", nbuf+5);
-			mp = map_by_uuid(&map, info->uuid);
-			if (mp && mp->path &&
-			    strncmp(mp->path, "/dev/md/", 8) == 0) {
-				printf("MD_DEVNAME=");
-				print_escape(mp->path+8);
-				putchar('\n');
+
+			// Subarray/container (ie: ddf) takes the devname directly from the name.
+			if (subarray) {
+				printf("MD_DEVNAME=%s\n", info->name);
+			} else {
+				struct map_ent *mp, *map = NULL;
+				mp = map_by_uuid(&map, info->uuid);
+				if (mp && mp->path &&
+					strncmp(mp->path, "/dev/md/", 8) == 0) {
+					printf("MD_DEVNAME=");
+					print_escape(mp->path+8);
+					putchar('\n');
+                }
 			}
 
 			if (st->ss->export_detail_super)
