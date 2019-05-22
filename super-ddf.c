@@ -948,38 +948,37 @@ static int load_ddf_headers(int fd, struct ddf_super *super, char *devname)
 
 	get_dev_size(fd, NULL, &dsize);
 
+	if (!devname)
+		devname = "metadata";
+
 	if (lseek64(fd, dsize-512, 0) < 0) {
-		if (devname)
-			pr_err("Cannot seek to anchor block on %s: %s\n",
-			       devname, strerror(errno));
+		pr_err("%s: cannot seek to anchor block: %s\n",
+		       devname, strerror(errno));
 		return 1;
 	}
 	if (read(fd, &super->anchor, 512) != 512) {
-		if (devname)
-			pr_err("Cannot read anchor block on %s: %s\n",
-			       devname, strerror(errno));
+		pr_err("%s: cannot read anchor block: %s\n",
+		       devname, strerror(errno));
 		return 1;
 	}
 	if (!be32_eq(super->anchor.magic, DDF_HEADER_MAGIC)) {
-		if (devname)
-			pr_err("no DDF anchor found on %s\n",
-				devname);
+		pr_err("%s: no DDF anchor found\n",
+			devname);
 		return 2;
 	}
 	if (!be32_eq(calc_crc(&super->anchor, 512), super->anchor.crc)) {
-		if (devname)
-			pr_err("bad CRC on anchor on %s\n",
-				devname);
+		pr_err("%s: bad CRC on anchor\n",
+		       devname);
 		return 2;
 	}
 	if (memcmp(super->anchor.revision, DDF_REVISION_0, 8) != 0 &&
 	    memcmp(super->anchor.revision, DDF_REVISION_2, 8) != 0) {
-		if (devname)
-			pr_err("can only support super revision %.8s and earlier, not %.8s on %s\n",
-				DDF_REVISION_2, super->anchor.revision,devname);
+		pr_err("%s: can only support super revision %.8s and earlier, not %.8s\n",
+		       devname, DDF_REVISION_2, super->anchor.revision);
 		return 2;
 	}
 	super->active = NULL;
+
 	if (load_ddf_header(fd,
 			    be64_to_cpu(super->anchor.primary_lba),
 			    dsize >> 9,
@@ -987,8 +986,8 @@ static int load_ddf_headers(int fd, struct ddf_super *super, char *devname)
 			    &super->primary,
 			    &super->anchor)) {
 		super->active = &super->primary;
-	} else if (devname) {
-		pr_err("Failed to load primary DDF header on %s\n", devname);
+	} else {
+		pr_err("%s: failed to load primary DDF header\n", devname);
 	}
 
 	if (load_ddf_header(fd,
@@ -1000,9 +999,8 @@ static int load_ddf_headers(int fd, struct ddf_super *super, char *devname)
 		if (super->active == NULL ||
 		    be32_to_cpu(super->primary.seq) < be32_to_cpu(super->secondary.seq))
 			super->active = &super->secondary;
-	} else if (devname &&
-		   be64_to_cpu(super->anchor.secondary_lba) != ~(__u64)0) {
-		pr_err("Failed to load secondary DDF header on %s\n",
+	} else if (be64_to_cpu(super->anchor.secondary_lba) != ~(__u64)0) {
+		pr_err("%s: failed to load secondary DDF header\n",
 		       devname);
 	}
 
@@ -1050,6 +1048,9 @@ static int load_ddf_global(int fd, struct ddf_super *super, char *devname)
 static int validate_ddf_super(struct ddf_super *super, char *devname, int valid_crc)
 {
 	be32 crc;
+
+	if (!devname)
+		devname = "metadata";
 
 	// header
 	struct ddf_header *header = super->active;
@@ -3495,13 +3496,15 @@ static int _write_super_to_disk(struct ddf_super *ddf, struct dl *d)
 		return 0;
 	}
 
-	if (!__write_ddf_structure(d, ddf, DDF_HEADER_PRIMARY)) {
-		dprintf("primary header write failed\n");
+	// write secondary first
+	if (!__write_ddf_structure(d, ddf, DDF_HEADER_SECONDARY)) {
+		dprintf("secondary header write failed\n");
 		return 0;
 	}
 
-	if (!__write_ddf_structure(d, ddf, DDF_HEADER_SECONDARY)) {
-		dprintf("secondary header write failed\n");
+	// then write primary
+	if (!__write_ddf_structure(d, ddf, DDF_HEADER_PRIMARY)) {
+		dprintf("primary header write failed\n");
 		return 0;
 	}
 
@@ -3989,12 +3992,13 @@ static int load_super_ddf_all(struct supertype *st, int fd,
 			      void **sbp, char *devname)
 {
 	struct mdinfo *sra = NULL;
-	struct ddf_super *super;
+	struct ddf_super *super = NULL;
 	struct mdinfo *sd, *best = NULL;
 	int bestseq = 0;
 	int seq;
 	char nm[20];
 	int dfd;
+	int rv;
 
 	dprintf("load_super_ddf_all()\n");
 
@@ -4012,12 +4016,10 @@ static int load_super_ddf_all(struct supertype *st, int fd,
 
 	/* first, try each device, and choose the best ddf */
 	for (sd = sra->devs ; sd ; sd = sd->next) {
-		int rv;
 		sprintf(nm, "%d:%d", sd->disk.major, sd->disk.minor);
 		dfd = dev_open(nm, O_RDONLY);
 		if (dfd < 0) {
-			dprintf("load_super_ddf_all: failed to open device %d:%d\n",
-					sd->disk.major, sd->disk.minor);
+			dprintf("failed to open device %s\n", nm);
 			continue;
 		}
 		rv = load_ddf_headers(dfd, super, NULL);
@@ -4040,29 +4042,51 @@ static int load_super_ddf_all(struct supertype *st, int fd,
 	dfd = dev_open(nm, O_RDONLY);
 	if (dfd < 0)
 		goto error;
-	load_ddf_headers(dfd, super, NULL);
-	load_ddf_global(dfd, super, NULL);
+	rv = load_ddf_headers(dfd, super, NULL);
+	if (rv) {
+		close(dfd);
+		dprintf("failed read to ddf headers from best device: %s\n", nm);
+		goto error;
+	}
+	rv = load_ddf_global(dfd, super, NULL);
+	if (rv) {
+		close(dfd);
+		dprintf("failed to read ddf global from best device: %s\n", nm);
+		goto error;
+	}
 	close(dfd);
 
 	/* Now we need the device-local bits */
 	for (sd = sra->devs ; sd ; sd = sd->next) {
-		int rv;
-
 		sprintf(nm, "%d:%d", sd->disk.major, sd->disk.minor);
+
+		// read-write as we keep it open
 		dfd = dev_open(nm, O_RDWR);
 		if (dfd < 0) {
-			dprintf("load_super_ddf_all: failed to open device %d:%d\n",
-					sd->disk.major, sd->disk.minor);
+			dprintf("failed to open device: %s\n", nm);
 			continue;
 		}
+
+		// ensure valid metadata on this device
 		rv = load_ddf_headers(dfd, super, NULL);
+
+		// load and open device and keep it open
 		if (rv == 0)
 			rv = load_ddf_local(dfd, super, NULL, 1);
+
+		// device failed to load; skip it
 		if (rv) {
-			dprintf("load_super_ddf_all: unable to read metadata from device %d:%d\n",
-					sd->disk.major, sd->disk.minor);
+			close(dfd);
+			dprintf("unable to read ddf local from device: %s\n", nm);
 			continue;
 		}
+	}
+
+	// validate the loaded metadata sections
+	rv = validate_ddf_super(super, NULL, 1);
+	if (rv) {
+		pr_err("failed to validate loaded metadata\n");
+		goto error;
 	}
 
 	*sbp = super;
@@ -4076,6 +4100,7 @@ static int load_super_ddf_all(struct supertype *st, int fd,
 	return 0;
 
 error:
+	free(super);
 	sysfs_free(sra);
 	return 1;
 }
