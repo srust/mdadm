@@ -1486,7 +1486,8 @@ extern void append_metadata_update(struct supertype *st, void *buf, int len);
 extern int assemble_container_content(struct supertype *st, int mdfd,
 				      struct mdinfo *content, struct context *c,
 				      char *chosen_name, struct mddev_ident *ident,
-				      int *result);
+				      int64_t min_assembly_seq, int *result);
+extern int get_assembly_seq(struct context *c, struct supertype *st, int64_t *seq_out);
 #define	INCR_NO		1
 #define	INCR_UNSAFE	2
 #define	INCR_ALREADY	4

@@ -1493,13 +1493,23 @@ try_again:
 		ioctl(mdfd, STOP_ARRAY, NULL);
 	}
 
+	// lookup minimum required assembly sequence number
+	rv = get_assembly_seq(c, st, &min_assembly_seq);
+	if (rv != 0) {
+		pr_err("assembly sequence number lookup failed\n");
+		if (st)
+			st->ss->free_super(st);
+		close(mdfd);
+		return 1;
+	}
+
 #ifndef MDASSEMBLE
 	if (content != &info) {
 		/* This is a member of a container.  Try starting the array. */
 		int err;
 		err = assemble_container_content(st, mdfd, content, c,
 										 chosen_name,
-										 ident, NULL);
+										 ident, min_assembly_seq, NULL);
 		close(mdfd);
 		return err;
 	}
@@ -1530,36 +1540,7 @@ try_again:
 	st->ss->getinfo_super(st, content, NULL);
 	clean = content->array.state & 1;
 
-	// Blockbridge:
-	//
-	// Consult clustered mdvote sequence database to determine if
-	// assembly is possible.
-	//
-	if (c->mdvote && st->ss->get_assembly_seq) {
-
-		min_assembly_seq = st->ss->get_assembly_seq(st);
-
-		if (min_assembly_seq < 0) {
-			if (min_assembly_seq == -ENOENT) {
-				dprintf("no minimum assembly sequence number found\n");
-				min_assembly_seq = 0;
-			}
-			else {
-				pr_err("failed to retrieve minimum assembly sequence number\n");
-				if (st)
-					st->ss->free_super(st);
-				close(mdfd);
-				free(devices);
-				free(devmap);
-				return 1;
-			}
-		}
-
-		if (c->verbose > 0)
-			dprintf("min_assembly_seq:%ld\n", min_assembly_seq);
-	}
-
-        /* now we have some devices that might be suitable.
+	/* now we have some devices that might be suitable.
 	 * I wonder how many
 	 */
 	avail = xcalloc(content->array.raid_disks, 1);
@@ -1907,11 +1888,48 @@ try_again:
 	return rv == 2 ? 0 : rv;
 }
 
+// Blockbridge:
+//
+// Consult clustered mdvote sequence database to determine if assembly is
+// possible.
+//
+// Return 0 on success and set *seq_out to the minimum required assembly
+// sequence number.
+int
+get_assembly_seq(struct context *c, struct supertype *st, int64_t *seq_out)
+{
+	int64_t seq = 0;
+
+	// min sequence not supported
+	if (!c->mdvote || !st->ss->get_assembly_seq)
+		goto out;
+
+	// lookup minimum sequence
+	seq = st->ss->get_assembly_seq(st);
+	if (seq == -ENOENT) {
+		// no sequence number found; initialize it
+		dprintf("no minimum assembly sequence number found\n");
+		seq = 0;
+	} else if (seq < 0) {
+		pr_err("failed to retrieve minimum assembly sequence number\n");
+		return 1;
+	}
+
+	if (c->verbose > 0)
+		dprintf("min_assembly_seq: %ld\n", seq);
+
+out:
+	if (seq_out)
+		*seq_out = seq;
+
+	return 0;
+}
+
 #ifndef MDASSEMBLE
 int assemble_container_content(struct supertype *st, int mdfd,
-							   struct mdinfo *content, struct context *c,
-							   char *chosen_name, struct mddev_ident *ident,
-							   int *result)
+			       struct mdinfo *content, struct context *c,
+			       char *chosen_name, struct mddev_ident *ident,
+			       int64_t min_assembly_seq, int *result)
 {
 	struct mdinfo *dev, *sra, *dev2;
 	int working = 0, preexist = 0;
@@ -1957,12 +1975,26 @@ int assemble_container_content(struct supertype *st, int mdfd,
 		block_subarray(content);
 
 	for (dev2 = sra->devs; dev2; dev2 = dev2->next) {
-		for (dev = content->devs; dev; dev = dev->next)
+		for (dev = content->devs; dev; dev = dev->next) {
+			// skip dev if event count too low
+			if ((int)dev->events < min_assembly_seq) {
+				pr_err("%d:%d event counter: %llu is below minimum assembly sequence number: %ld\n",
+				       dev->disk.major,
+				       dev->disk.minor,
+				       dev->events,
+				       min_assembly_seq);
+				continue;
+			}
+
+			// keep dev if major/minor match
 			if (dev2->disk.major == dev->disk.major &&
 			    dev2->disk.minor == dev->disk.minor)
 				break;
+		}
+
 		if (dev)
 			continue;
+
 		/* Don't want this one any more */
 		if (sysfs_set_str(sra, dev2, "slot", "none") < 0 &&
 		    errno == EBUSY) {
@@ -1975,6 +2007,15 @@ int assemble_container_content(struct supertype *st, int mdfd,
 	old_raid_disks = content->array.raid_disks - content->delta_disks;
 	avail = xcalloc(content->array.raid_disks, 1);
 	for (dev = content->devs; dev; dev = dev->next) {
+		// skip dev if event count too low
+		if ((int)dev->events < min_assembly_seq) {
+			pr_err("%d:%d event counter: %llu is below minimum assembly sequence number: %ld\n",
+				dev->disk.major,
+				dev->disk.minor,
+				dev->events,
+				min_assembly_seq);
+			continue;
+		}
 		if (dev->disk.raid_disk >= 0)
 			avail[dev->disk.raid_disk] = 1;
 		if (sysfs_add_disk(content, dev, 1) == 0) {
