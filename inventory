@@ -1,5 +1,6 @@
 
 .gitignore
+.lvimrc
 ANNOUNCE-3.0
 ANNOUNCE-3.0.1
 ANNOUNCE-3.0.2
