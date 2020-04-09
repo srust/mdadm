@@ -320,7 +320,8 @@ struct mdinfo {
 	#define DS_BLOCKED	16
 	#define	DS_REMOVE	1024
 	#define	DS_UNBLOCK	2048
-    #define DS_WRITE_ERROR 4096
+	#define DS_WRITE_ERROR  4096
+	#define DS_REPLACEMENT  8192
 	int prev_state, curr_state, next_state;
 
 	/* info read from sysfs */
@@ -1027,7 +1028,16 @@ extern struct superswitch {
 	 * set_disk might be called when the state of the particular disk has
 	 * not in fact changed.
 	 */
-	void (*set_disk)(struct active_array *a, int n, int state);
+	void (*set_disk)(struct active_array *a, mdu_disk_info_t *dsk, int state);
+
+	/* Complete the disk replacement. Once a replaced disk goes faulty,
+	 * replace it with the selected replacement in it's slot. This updates
+	 * the metadata to "move" the replacement disk down and replaces the
+	 * faulty disk.
+	 */
+	void (*replace_disk)(struct active_array *a, mdu_disk_info_t *dsk,
+			     struct metadata_update **updates);
+
 	int (*sync_metadata)(struct supertype *st);
 	void (*process_update)(struct supertype *st,
 			       struct metadata_update *update);

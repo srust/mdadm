@@ -575,6 +575,7 @@ static void manage_member(struct mdstat_ent *mdstat,
 	int frozen;
 	struct supertype *container = a->container;
 	unsigned long long int component_size = 0;
+	struct timeval tv;
 
 	if (container == NULL)
 		/* Raced with something */
@@ -623,6 +624,11 @@ static void manage_member(struct mdstat_ent *mdstat,
 	 */
 	if (a->container == NULL)
 		return;
+
+	gettimeofday(&tv, NULL);
+	dprintf("array%d: %ld.%06ld\n",
+		a->info.container_member,
+		tv.tv_sec, tv.tv_usec);
 
 	if (sigterm && a->info.safe_mode_delay != 1) {
 		sysfs_set_safemode(&a->info, 1);
@@ -742,6 +748,112 @@ static void manage_member(struct mdstat_ent *mdstat,
 		sysfs_free(info);
 		if (newa)
 			replace_array(container, a, newa);
+	}
+
+	if (a->check_replacement && !frozen &&
+	    update_queue == NULL && update_queue_pending == NULL) {
+		dprintf("checking for replacement...\n");
+		/*
+		 * check for disks being replaced and activate spares to replace them.
+		 */
+		struct metadata_update *updates = NULL;
+		struct mdinfo *newdev = NULL;
+		struct mdinfo *info, *mdi, *d, *newd;
+		struct active_array *newa;
+
+		a->check_replacement = 0;
+		info = sysfs_read(-1, mdstat->devnm,
+				  GET_DEVS|GET_OFFSET|GET_SIZE|GET_STATE);
+		if (!info)
+			goto out3;
+
+		/* check disk states for those wanting replacement */
+		for (d = info->devs; d; d = d->next) {
+			dprintf("disk in array: %d:%d state: %d\n",
+				d->disk.major, d->disk.minor, d->disk.state);
+			if (d->disk.raid_disk < 0)
+				continue;
+			if (!(d->disk.state & (1 << MD_DISK_REPLACEMENT)))
+				continue;
+
+			dprintf("replacement: wanted %d:%d\n",
+				d->disk.major, d->disk.minor);
+
+			/* Activate a replacement */
+			newdev = container->ss->activate_spare(a, &updates);
+			if (!newdev)
+				continue;
+
+			newa = duplicate_aa(a);
+			if (!newa)
+				goto out3;
+
+			/* prevent the kernel from activating the disk(s) before we
+			* finish adding them
+			*/
+			dprintf("freezing %s\n", a->info.sys_name);
+			sysfs_set_str(&a->info, NULL, "sync_action", "frozen");
+
+			/* set replacement disk to replace the raid_disk */
+			newdev->disk.raid_disk = d->disk.raid_disk;
+
+			if (sysfs_add_disk(&newa->info, newdev, 0) < 0) {
+				free(newd);
+				continue;
+			}
+			newd = xmalloc(sizeof(*newd));
+			disk_init_and_add(newd, newdev, newa);
+
+			queue_metadata_update(updates);
+			updates = NULL;
+			while (update_queue_pending || update_queue) {
+				check_update_queue(container);
+				usleep(15*1000);
+			}
+			replace_array(container, a, newa);
+			if (sysfs_set_str(&a->info, NULL, "sync_action", "recover")
+			== 0)
+				newa->prev_action = recover;
+
+			dprintf("recovery started on %s\n", a->info.sys_name);
+
+			free(newdev);
+			free_updates(&updates);
+		}
+
+		for (mdi = a->info.devs; mdi; mdi = mdi->next) {
+			updates = NULL;
+
+			dprintf("check disk for replacement: %d (%d:%d) state %d\n",
+					mdi->disk.raid_disk,
+					mdi->disk.major,
+					mdi->disk.minor,
+					mdi->curr_state);
+
+			if ((mdi->curr_state & (DS_FAULTY|DS_REPLACEMENT)) !=
+			    (DS_FAULTY|DS_REPLACEMENT)) {
+			      	continue;
+			}
+
+			dprintf("REPLACE disk: %d (%d:%d)\n",
+				mdi->disk.raid_disk,
+				mdi->disk.major,
+				mdi->disk.minor);
+
+			/* check for replacement complete */
+			a->container->ss->replace_disk(a, &mdi->disk, &updates);
+
+			/* queue any wait for metadata update */
+			queue_metadata_update(updates);
+			updates = NULL;
+			while (update_queue_pending || update_queue) {
+				check_update_queue(container);
+				usleep(15*1000);
+			}
+		}
+
+out3:
+		sysfs_free(info);
 	}
 }
 

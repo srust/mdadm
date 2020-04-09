@@ -342,6 +342,8 @@ struct mdinfo *sysfs_read(int fd, char *devnm, unsigned long options)
 				dev->disk.state |= (1<<MD_DISK_SYNC);
 			if (strstr(buf, "faulty"))
 				dev->disk.state |= (1<<MD_DISK_FAULTY);
+			if (strstr(buf, "want_replacement"))
+				dev->disk.state |= (1<<MD_DISK_REPLACEMENT);
 			if (dev->disk.state == 0)
 				sra->array.spare_disks++;
 		}

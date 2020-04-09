@@ -156,6 +156,8 @@ int read_dev_state(int fd)
 			rv |= DS_SPARE;
 		if (sysfs_attr_match(cp, "blocked"))
 			rv |= DS_BLOCKED;
+		if (sysfs_attr_match(cp, "want_replacement"))
+			rv |= DS_REPLACEMENT;
         if (sysfs_attr_match(cp, "write_error"))
             rv |= DS_WRITE_ERROR;
 		cp = strchr(cp, ',');
@@ -410,6 +412,7 @@ static int read_and_act(struct active_array *a, fd_set *fds)
 	unsigned long long sync_completed;
 	int check_degraded = 0;
 	int check_reshape = 0;
+	int check_replacement = 0;
 	int deactivate = 0;
 	struct mdinfo *mdi;
 	int ret = 0;
@@ -430,6 +433,17 @@ static int read_and_act(struct active_array *a, fd_set *fds)
 	if (a->curr_state != clear)
 		read_resync_start(a->resync_start_fd, &a->info.resync_start);
 
+	gettimeofday(&tv, NULL);
+	dprintf("array%d: %ld.%06ld state:%s prev_state:%s action:%s prev_action:%s resync_start:%llu\n",
+		a->info.container_member,
+		tv.tv_sec, tv.tv_usec,
+		array_states[a->curr_state],
+		array_states[a->prev_state],
+		sync_actions[a->curr_action],
+		sync_actions[a->prev_action],
+		a->info.resync_start
+		);
+
 	sync_completed = read_sync_completed(a->sync_completed_fd);
 	for (mdi = a->info.devs; mdi ; mdi = mdi->next) {
 		mdi->next_state = 0;
@@ -448,6 +462,10 @@ static int read_and_act(struct active_array *a, fd_set *fds)
 			dprintf("curr_state: FAULTY: disk %d\n",
 				mdi->disk.raid_disk);
 		}
+		if (mdi->curr_state & DS_REPLACEMENT) {
+			dprintf("curr_state: WANT_REPLACEMENT: disk %d\n",
+				mdi->disk.raid_disk);
+		}
 
 		/*
 		 * If array is blocked and metadata handler is able to handle
@@ -462,17 +480,6 @@ static int read_and_act(struct active_array *a, fd_set *fds)
 		if (FD_ISSET(mdi->bb_fd, fds))
 			check_for_cleared_bb(a, mdi);
 	}
-
-	gettimeofday(&tv, NULL);
-	dprintf("array%d: %ld.%06ld state:%s prev_state:%s action:%s prev_action:%s resync_start:%llu\n",
-		a->info.container_member,
-		tv.tv_sec, tv.tv_usec,
-		array_states[a->curr_state],
-		array_states[a->prev_state],
-		sync_actions[a->curr_action],
-		sync_actions[a->prev_action],
-		a->info.resync_start
-		);
 
 	if ((a->curr_state == bad_word || a->curr_state <= inactive) &&
 	    a->prev_state > inactive) {
@@ -537,7 +544,7 @@ static int read_and_act(struct active_array *a, fd_set *fds)
 		 * and the array may no longer be degraded
 		 */
 		for (mdi = a->info.devs ; mdi ; mdi = mdi->next) {
-			a->container->ss->set_disk(a, mdi->disk.raid_disk,
+			a->container->ss->set_disk(a, &mdi->disk,
 						   mdi->curr_state);
 			if (! (mdi->curr_state & DS_INSYNC))
 				check_degraded = 1;
@@ -566,18 +573,27 @@ static int read_and_act(struct active_array *a, fd_set *fds)
 	 */
 	for (mdi = a->info.devs ; mdi ; mdi = mdi->next) {
 		if (mdi->curr_state & DS_BLOCKED) {
-			dprintf("curr_state: DS_BLOCKED: disk %d\n",
-				mdi->disk.raid_disk);
+			dprintf("curr_state: DS_BLOCKED: disk %d (%d:%d)\n",
+				mdi->disk.raid_disk,
+				mdi->disk.major,
+				mdi->disk.minor);
 		}
 		if (mdi->curr_state & DS_FAULTY) {
-			dprintf("curr_state: FAULTY disk: %d\n", mdi->disk.number);
-			a->container->ss->set_disk(a, mdi->disk.raid_disk,
+			dprintf("curr_state: FAULTY disk: %d (%d:%d)\n",
+				mdi->disk.number,
+				mdi->disk.major,
+				mdi->disk.minor);
+			a->container->ss->set_disk(a, &mdi->disk,
 						   mdi->curr_state);
 			a->container->ss->update_state(a->container);
 			check_degraded = 1;
+			check_replacement = 1;
+				
 			if (mdi->curr_state & DS_BLOCKED) {
-				dprintf("FAULTY disk is DS_BLOCKED: %d\n",
-					mdi->disk.raid_disk);
+				dprintf("FAULTY disk is DS_BLOCKED: %d (%d:%d)\n",
+					mdi->disk.raid_disk,
+					mdi->disk.major,
+					mdi->disk.minor);
 				mdi->next_state |= DS_UNBLOCK;
 			}
 			if (a->curr_state == read_auto) {
@@ -586,6 +602,10 @@ static int read_and_act(struct active_array *a, fd_set *fds)
 			}
 			if (a->curr_state > readonly)
 				mdi->next_state |= DS_REMOVE;
+		}
+		if (mdi->curr_state & DS_REPLACEMENT) {
+			dprintf("CHECKING for replacmdent needed\n");
+			check_replacement = 1;
 		}
 	}
 
@@ -717,12 +737,14 @@ static int read_and_act(struct active_array *a, fd_set *fds)
 		mdi->next_state = 0;
 	}
 
-	if (check_degraded || check_reshape) {
+	if (check_degraded || check_reshape || check_replacement) {
 		/* manager will do the actual check */
 		if (check_degraded)
 			a->check_degraded = 1;
 		if (check_reshape)
 			a->check_reshape = 1;
+		if (check_replacement)
+			a->check_replacement = 1;
 		signal_manager();
 	}
 

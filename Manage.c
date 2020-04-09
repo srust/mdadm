@@ -1386,10 +1386,13 @@ int Manage_replace(struct supertype *tst, int fd, struct mddev_dev *dv,
 		   unsigned long rdev, int verbose, char *devname)
 {
 	struct mdinfo *mdi, *di;
+#if 0
 	if (tst->ss->external) {
 		pr_err("--replace only supported for native metadata (0.90 or 1.x)\n");
 		return -1;
 	}
+#endif
+
 	/* Need to find the device in sysfs and add 'want_replacement' to the
 	 * status.
 	 */
@@ -1830,10 +1833,12 @@ int Manage_subdevs(char *devname, int fd,
 					dv->devname, devname);
 			break;
 		case 'R': /* Mark as replaceable */
+#if 0
 			if (subarray) {
 				pr_err("Cannot replace disks in a \'member\' array, perform this operation on the parent container\n");
 				rv = -1;
 			} else {
+#endif
 				if (!frozen) {
 					if (sysfs_freeze_array(&info) == 1)
 						frozen = 1;
@@ -1843,7 +1848,9 @@ int Manage_subdevs(char *devname, int fd,
 				rv = Manage_replace(tst, fd, dv,
 						    rdev, verbose,
 						    devname);
+#if 0
 			}
+#endif
 			if (rv < 0)
 				goto abort;
 			if (rv > 0)

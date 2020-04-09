@@ -49,6 +49,7 @@ struct active_array {
 
 	int check_degraded; /* flag set by mon, read by manage */
 	int check_reshape; /* flag set by mon, read by manage */
+	int check_replacement; /* flag set by mon, read by manage */
 };
 
 /*
