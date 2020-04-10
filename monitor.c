@@ -454,17 +454,33 @@ static int read_and_act(struct active_array *a, fd_set *fds)
 			mdi->curr_state = read_dev_state(mdi->state_fd);
 		}
 
-		if (mdi->curr_state & DS_WRITE_ERROR) {
-			dprintf("curr_state: WRITE_ERROR: disk %d\n",
-				mdi->disk.raid_disk);
-		}
-		if (mdi->curr_state & DS_FAULTY) {
-			dprintf("curr_state: FAULTY: disk %d\n",
-				mdi->disk.raid_disk);
-		}
-		if (mdi->curr_state & DS_REPLACEMENT) {
-			dprintf("curr_state: WANT_REPLACEMENT: disk %d\n",
-				mdi->disk.raid_disk);
+		if (mdi->curr_state & (DS_WRITE_ERROR |
+				       DS_FAULTY |
+				       DS_REPLACEMENT |
+				       DS_BLOCKED |
+				       DS_SPARE)) {
+
+			dprintf("disk%d (%d:%d) state: ",
+				mdi->disk.raid_disk,
+				mdi->disk.major,
+				mdi->disk.minor);
+
+			if (mdi->curr_state & DS_WRITE_ERROR) {
+				fprintf(stderr, "WRITE_ERROR ");
+			}
+			if (mdi->curr_state & DS_FAULTY) {
+				fprintf(stderr, "FAULTY ");
+			}
+			if (mdi->curr_state & DS_BLOCKED) {
+				fprintf(stderr, "BLOCKED ");
+			}
+			if (mdi->curr_state & DS_SPARE) {
+				fprintf(stderr, "SPARE ");
+			}
+			if (mdi->curr_state & DS_REPLACEMENT) {
+				fprintf(stderr, "WANT_REPLACEMENT ");
+			}
+			fprintf(stderr, "\n");
 		}
 
 		/*
@@ -587,6 +603,10 @@ static int read_and_act(struct active_array *a, fd_set *fds)
 						   mdi->curr_state);
 			a->container->ss->update_state(a->container);
 			check_degraded = 1;
+
+			/* check replacement on every faulty disk.
+			 * can we race with DS_FAULTY | DS_REPLACEMENT both being set? 
+			 */
 			check_replacement = 1;
 				
 			if (mdi->curr_state & DS_BLOCKED) {
@@ -604,7 +624,6 @@ static int read_and_act(struct active_array *a, fd_set *fds)
 				mdi->next_state |= DS_REMOVE;
 		}
 		if (mdi->curr_state & DS_REPLACEMENT) {
-			dprintf("CHECKING for replacmdent needed\n");
 			check_replacement = 1;
 		}
 	}

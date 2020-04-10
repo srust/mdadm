@@ -576,6 +576,7 @@ static void manage_member(struct mdstat_ent *mdstat,
 	struct supertype *container = a->container;
 	unsigned long long int component_size = 0;
 	struct timeval tv;
+	struct mdinfo *mdi;
 
 	if (container == NULL)
 		/* Raced with something */
@@ -629,6 +630,20 @@ static void manage_member(struct mdstat_ent *mdstat,
 	dprintf("array%d: %ld.%06ld\n",
 		a->info.container_member,
 		tv.tv_sec, tv.tv_usec);
+
+	dprintf("check_replacement: %d\n", a->check_replacement);
+	dprintf("update_queue:  %p\n", update_queue);
+	dprintf("queue_pending: %p\n", update_queue_pending);
+	dprintf("frozen:        %d\n", frozen);
+
+	for (mdi = a->info.devs; mdi; mdi = mdi->next) {
+		dprintf("array%d disk%d (%d:%d) state %d\n",
+			a->info.container_member,
+			mdi->disk.raid_disk,
+			mdi->disk.major,
+			mdi->disk.minor,
+			mdi->curr_state);
+	}
 
 	if (sigterm && a->info.safe_mode_delay != 1) {
 		sysfs_set_safemode(&a->info, 1);
@@ -752,13 +767,13 @@ static void manage_member(struct mdstat_ent *mdstat,
 
 	if (a->check_replacement && !frozen &&
 	    update_queue == NULL && update_queue_pending == NULL) {
-		dprintf("checking for replacement...\n");
+		dprintf("disk replacement check...\n");
 		/*
 		 * check for disks being replaced and activate spares to replace them.
 		 */
 		struct metadata_update *updates = NULL;
 		struct mdinfo *newdev = NULL;
-		struct mdinfo *info, *mdi, *d, *newd;
+		struct mdinfo *info, *d, *newd;
 		struct active_array *newa;
 
 		a->check_replacement = 0;
@@ -776,7 +791,7 @@ static void manage_member(struct mdstat_ent *mdstat,
 			if (!(d->disk.state & (1 << MD_DISK_REPLACEMENT)))
 				continue;
 
-			dprintf("replacement: wanted %d:%d\n",
+			dprintf("replacement wanted %d:%d\n",
 				d->disk.major, d->disk.minor);
 
 			/* Activate a replacement */
@@ -789,8 +804,8 @@ static void manage_member(struct mdstat_ent *mdstat,
 				goto out3;
 
 			/* prevent the kernel from activating the disk(s) before we
-			* finish adding them
-			*/
+			 * finish adding them
+			 */
 			dprintf("freezing %s\n", a->info.sys_name);
 			sysfs_set_str(&a->info, NULL, "sync_action", "frozen");
 
@@ -820,19 +835,18 @@ static void manage_member(struct mdstat_ent *mdstat,
 			free(newdev);
 			free_updates(&updates);
 		}
+out3:
+		sysfs_free(info);
+	}
 
+	if (update_queue == NULL && update_queue_pending == NULL) {
+		struct metadata_update *updates = NULL;
 		for (mdi = a->info.devs; mdi; mdi = mdi->next) {
 			updates = NULL;
 
-			dprintf("check disk for replacement: %d (%d:%d) state %d\n",
-					mdi->disk.raid_disk,
-					mdi->disk.major,
-					mdi->disk.minor,
-					mdi->curr_state);
-
 			if ((mdi->curr_state & (DS_FAULTY|DS_REPLACEMENT)) !=
-			    (DS_FAULTY|DS_REPLACEMENT)) {
-			      	continue;
+				(DS_FAULTY|DS_REPLACEMENT)) {
+				continue;
 			}
 
 			dprintf("REPLACE disk: %d (%d:%d)\n",
@@ -850,10 +864,11 @@ static void manage_member(struct mdstat_ent *mdstat,
 				check_update_queue(container);
 				usleep(15*1000);
 			}
-		}
 
-out3:
-		sysfs_free(info);
+			struct active_array *newa = duplicate_aa(a);
+			if (newa)
+				replace_array(container, a, newa);
+		}
 	}
 }
 

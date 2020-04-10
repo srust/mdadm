@@ -5257,7 +5257,7 @@ ddf_replace_disk(struct active_array *a, mdu_disk_info_t *dsk,
 	}
 
 	if (!dl_new) {
-		pr_err("cannot find raid disk dl to be replaced %d (%d:%d)\n",
+		pr_err("cannot find raid disk dl replacement %d (%d:%d)\n",
 		       n, mdi->disk.major, mdi->disk.minor);
 		return;
 	}
@@ -5346,6 +5346,23 @@ ddf_replace_disk(struct active_array *a, mdu_disk_info_t *dsk,
 	vc->phys_refnum[cur_bvd]     = vc->phys_refnum[new_bvd];
 	vc->phys_refnum[new_bvd]     = cpu_to_be32(0xFFFFFFFF);
 	LBA_OFFSET(ddf, vc)[cur_bvd] = LBA_OFFSET(ddf, vc)[new_bvd];
+
+	/*
+	 * remove "disk being replaced" from dlist.
+	 *
+	 * This will cause metadata update to remove the physical disk from
+	 * metadata
+	 */
+	struct dl **dlp;
+	for (dlp = &ddf->dlist; *dlp; dlp = &(*dlp)->next) {
+		struct dl *dl = *dlp;
+		if (dl->pdnum == dl_cur->pdnum) {
+			close(dl->fd);
+			dl->fd = -1;
+			*dlp = dl->next;
+			break;
+		}
+	}
 
 	// Blockbridge:
 	//
