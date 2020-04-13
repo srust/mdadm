@@ -2108,9 +2108,26 @@ static int match_home_ddf(struct supertype *st, char *homehost)
 }
 
 #ifndef MDASSEMBLE
-static int find_index_in_bvd(const struct ddf_super *ddf,
-			     const struct vd_config *conf, unsigned int n,
-			     unsigned int *n_bvd)
+/*
+ * find_index_in_bvd()
+ *
+ * The "phys_refnum" array for member array (bvd) contains a list of
+ * physical disk refnums. The index of "phys_refnum" corresponds to
+ * the raid_disk number that the disk is assigned to the array.
+ *
+ * The "conf->prim_elmnt_count" corresponds to the total raid disks
+ * for the array. (i.e.: a RAID 1.2 will have prim_elmnt_count set to
+ * 2) This value cannot be changed without a reshape, which is
+ * unsupported.
+ *
+ * NOTE: in drive replacement, two physical disks have the same
+ * raid_disk number. This function finds only the *first* of those
+ * physical disks.
+ */
+static int
+find_index_in_bvd(const struct ddf_super *ddf,
+		  const struct vd_config *conf, unsigned int n,
+		  unsigned int *n_bvd)
 {
 	/*
 	 * Find the index of the n-th valid physical disk in this BVD.
@@ -2134,6 +2151,20 @@ static int find_index_in_bvd(const struct ddf_super *ddf,
 	return 0;
 }
 
+/*
+ * update_index_for_bvd()
+ *
+ * The previous function find_index_in_bvd() found the index of the
+ * first physical disk index matching the raid_disk number. For drive
+ * replacement, call this function to match a physical disk "refnum"
+ * to a physical disk index. This function walks the whole
+ * "phys_refnum" array, and does not cap the search at the configured
+ * number of total raid disks in the array. (i.e.: for a RAID 1.2 we
+ * search the full length of phys_refnum, do not stop at 2).
+ *
+ * The "dl" includes the refnum value that we match against to find
+ * the phys_refnum index value to return.
+ */
 static int
 update_index_for_bvd(const struct ddf_super *ddf,
 		     const struct vd_config *conf,
@@ -5029,9 +5060,13 @@ static int get_svd_state(const struct ddf_super *ddf, const struct vcl *vcl)
  *   array unless this is the only array that uses the device.
  *
  * So: when transitioning:
- *   Online -> failed,  just set failed flag.  monitor will propagate
+ *   online -> failed,  just set failed flag.  monitor will propagate
  *   spare -> online,   the device might need to be added to the array.
  *   spare -> failed,   just set failed.  Don't worry if in array or not.
+ *
+ * The mdu_disk_into_t is specified for the disk to set, as that includes the disk
+ * major/minor, and not just the raid disk number offset, 
+ * to ensure that the correct disk is being set.
  */
 static void ddf_set_disk(struct active_array *a, mdu_disk_info_t *dsk, int state)
 {
@@ -5084,6 +5119,10 @@ static void ddf_set_disk(struct active_array *a, mdu_disk_info_t *dsk, int state
 		dl->pdnum, dl->major, dl->minor,
 		n_bvd);
 
+	/* during drive replacement multiple disks contain the same
+	 * raid_disk number, update physical disk index here to be
+	 * sure we match the correct disk
+	 */
 	ret = update_index_for_bvd(ddf, vc, dl, &n_bvd);
 	if (ret) {
 		dprintf("unable to validate disk refnum for physical disk %d: %d:%d\n",
@@ -5170,7 +5209,8 @@ static void ddf_set_disk(struct active_array *a, mdu_disk_info_t *dsk, int state
  * - Check for faulty disk
  * - Find replacement disk (same raid_disk number disk)
  * - Replace faulty with replacement disk
- *
+ * - Remove faulty disk from the array
+ * - Return a metadata update to perform the update
  */
 static void
 ddf_replace_disk(struct active_array *a, mdu_disk_info_t *dsk,
@@ -5255,6 +5295,10 @@ ddf_replace_disk(struct active_array *a, mdu_disk_info_t *dsk,
 			dl_new->raiddisk,
 			dl_new->major,
 			dl_new->minor);
+
+		/* In the dlist, the new dl has not been assigned
+		 * a raid_disk yet. Ensure we select an unassigned
+		 * spare that matches */
 		if (dl_new->raiddisk == -1 && 
 		    mdi->disk.major == dl_new->major &&
 		    mdi->disk.minor == dl_new->minor)

@@ -607,7 +607,7 @@ static int read_and_act(struct active_array *a, fd_set *fds)
 			check_degraded = 1;
 
 			/* check replacement on every faulty disk.
-			 * can we race with DS_FAULTY | DS_REPLACEMENT both being set? 
+			 * We can race with DS_FAULTY | DS_REPLACEMENT not both being set as expected.
 			 */
 			check_replacement = 1;
 				
