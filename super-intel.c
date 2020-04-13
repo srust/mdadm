@@ -8312,6 +8312,7 @@ static int imsm_rebuild_allowed(struct supertype *cont, int dev_idx, int failed)
 }
 
 static struct mdinfo *imsm_activate_spare(struct active_array *a,
+					  int replace_only,
 					  struct metadata_update **updates)
 {
 	/**

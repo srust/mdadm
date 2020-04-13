@@ -667,7 +667,7 @@ static void manage_member(struct mdstat_ent *mdstat,
 		/* The array may not be degraded, this is just a good time
 		 * to check.
 		 */
-		newdev = container->ss->activate_spare(a, &updates);
+		newdev = container->ss->activate_spare(a, 0, &updates);
 		if (!newdev)
 			return;
 
@@ -808,7 +808,7 @@ static void manage_member(struct mdstat_ent *mdstat,
 				d->disk.major, d->disk.minor);
 
 			/* Activate a replacement */
-			newdev = container->ss->activate_spare(a, &updates);
+			newdev = container->ss->activate_spare(a, 1, &updates);
 			if (!newdev)
 				continue;
 

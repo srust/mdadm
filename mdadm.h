@@ -1048,14 +1048,18 @@ extern struct superswitch {
 	int (*prepare_update)(struct supertype *st,
 			       struct metadata_update *update);
 
-	/* activate_spare will check if the array is degraded and, if it
-	 * is, try to find some spare space in the container.
-	 * On success, it add appropriate updates (For process_update) to
-	 * to the 'updates' list and returns a list of 'mdinfo' identifying
-	 * the device, or devices as there might be multiple missing
-	 * devices and multiple spares available.
+	/* activate_spare will check if the array is degraded and, if it is,
+	 * try to find some spare space in the container.  On success, it add
+	 * appropriate updates (For process_update) to to the 'updates' list
+	 * and returns a list of 'mdinfo' identifying the device, or devices as
+	 * there might be multiple missing devices and multiple spares
+	 * available.
+	 *
+	 * Optionally, select a disk for replacement by providing replace=1.
+	 * This ensures only a single replacement disk is activated.
 	 */
 	struct mdinfo *(*activate_spare)(struct active_array *a,
+					 int replace_only,
 					 struct metadata_update **updates);
 	/*
 	 * Return statically allocated string that represents metadata specific

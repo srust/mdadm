@@ -6107,8 +6107,17 @@ out:
  * the new phys_refnum and lba_offset values.
  *
  * Only worry about BVDs at the moment.
+ *
+ * Provide a 'replace_only' boolean set to true if drive
+ * replacement is desired. In the drive replacement case,
+ * `ddf_activate_spare()` _only_ performs drive replacement,
+ * returning the one spare to be added as the replacement. If
+ * `replace_only` is not provided, then no drive replacement is
+ * performed, and spares are only activated if the array is
+ * degraded.
  */
 static struct mdinfo *ddf_activate_spare(struct active_array *a,
+					 int replace_only,
 					 struct metadata_update **updates)
 {
 	int working = 0;
@@ -6138,13 +6147,20 @@ static struct mdinfo *ddf_activate_spare(struct active_array *a,
 			replacement++;
 	}
 
-	dprintf("working=%d replacement=%d total=%d level=%d\n",
+	dprintf("working=%d replacement=%d replace_only=%d total=%d level=%d\n",
 		working,
 		replacement,
+		replace_only,
 		a->info.array.raid_disks,
 		a->info.array.level);
-	if (working == a->info.array.raid_disks && replacement == 0)
-		return NULL; /* array not degraded */
+	if (working == a->info.array.raid_disks) {
+		if (!replace_only)
+			return NULL; /* array not degraded or replacing */
+		if (replace_only && replacement == 0)
+			return NULL; /* nothing available to replace */
+	} else if (replace_only) {
+			return NULL; /* replacements only if !degraded */
+	}
 	switch (a->info.array.level) {
 	case 1:
 		if (working == 0)
@@ -6175,7 +6191,8 @@ static struct mdinfo *ddf_activate_spare(struct active_array *a,
 				break;
 		int replace = 0;
 		if (d) {
-			replace = (d->curr_state & DS_REPLACEMENT);
+			if (replace_only)
+				replace = (d->curr_state & DS_REPLACEMENT);
 			dprintf("found %d: %p %x%s\n", i, d, d?d->curr_state:0,
 				replace ? " (wants replacement) " : "");
 			if (d->state_fd >= 0 && !replace)
@@ -6286,12 +6303,16 @@ static struct mdinfo *ddf_activate_spare(struct active_array *a,
 
 			break;
 		}
-		if (!dl && ! global_ok) {
+		if (!dl && !global_ok) {
 			/* not enough dedicated spares, try global */
 			global_ok = 1;
 			dl = ddf->dlist;
 			goto again;
 		}
+
+		/* one replacement only */
+		if (replace && rv)
+			break;
 	}
 
 	if (!rv)
@@ -6338,7 +6359,7 @@ static struct mdinfo *ddf_activate_spare(struct active_array *a,
 			i_prim = di->disk.raid_disk + be16_to_cpu(vcl->conf.prim_elmnt_count);
 		}
 
-		dprintf("%s disk: %d (%d:%d) prim %d\n",
+		dprintf("%s disk: %d (%d:%d) primary index %d\n",
 			di->curr_state & DS_REPLACEMENT ? "replacement" : "spare",
 			di->disk.raid_disk,
 			di->disk.major,
