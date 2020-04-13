@@ -631,11 +631,6 @@ static void manage_member(struct mdstat_ent *mdstat,
 		a->info.container_member,
 		tv.tv_sec, tv.tv_usec);
 
-	dprintf("check_replacement: %d\n", a->check_replacement);
-	dprintf("update_queue:  %p\n", update_queue);
-	dprintf("queue_pending: %p\n", update_queue_pending);
-	dprintf("frozen:        %d\n", frozen);
-
 	for (mdi = a->info.devs; mdi; mdi = mdi->next) {
 		dprintf("array%d disk%d (%d:%d) state %d %s\n",
 			a->info.container_member,
@@ -652,8 +647,12 @@ static void manage_member(struct mdstat_ent *mdstat,
 		a->info.safe_mode_delay = 1;
 	}
 
-	/* We don't check the array while any update is pending, as it
-	 * might container a change (such as a spare assignment) which
+	/* Array Degraded Check
+	 *
+	 * Check whether we can activate a new spare on a degraded array.
+	 *
+	 * We don't check the array while any update is pending, as it
+	 * might contain a change (such as a spare assignment) which
 	 * could affect our decisions.
 	 */
 	if (a->check_degraded && !frozen &&
@@ -689,6 +688,9 @@ static void manage_member(struct mdstat_ent *mdstat,
 
 			newd = xmalloc(sizeof(*newd));
 
+			dprintf("activating spare: %d:%d\n",
+				d->disk.major, d->disk.minor);
+
 			/* re-add case, raid_disk >= 0.
 			 * Set resume to recover from bitmap
 			 */
@@ -710,8 +712,7 @@ static void manage_member(struct mdstat_ent *mdstat,
 			usleep(15*1000);
 		}
 		replace_array(container, a, newa);
-		if (sysfs_set_str(&a->info, NULL, "sync_action", "recover")
-		    == 0)
+		if (sysfs_set_str(&a->info, NULL, "sync_action", "recover") == 0)
 			newa->prev_action = recover;
 		dprintf("recovery started on %s\n", a->info.sys_name);
  out:
@@ -723,13 +724,15 @@ static void manage_member(struct mdstat_ent *mdstat,
 		free_updates(&updates);
 	}
 
+	/* Array Reshape Check
+	 *
+	 * mdadm might have added some devices to the array.
+	 * We want to disk_init_and_add any such device to a
+	 * duplicate_aa and replace a with that.
+	 * mdstat doesn't have enough info so we sysfs_read
+	 * and look for new stuff.
+	 */
 	if (a->check_reshape) {
-		/* mdadm might have added some devices to the array.
-		 * We want to disk_init_and_add any such device to a
-		 * duplicate_aa and replace a with that.
-		 * mdstat doesn't have enough info so we sysfs_read
-		 * and look for new stuff.
-		 */
 		struct mdinfo *info, *d, *d2, *newd;
 		unsigned long long array_size;
 		struct active_array *newa = NULL;
@@ -767,9 +770,17 @@ static void manage_member(struct mdstat_ent *mdstat,
 			replace_array(container, a, newa);
 	}
 
+	/* Array Replacement Start Check
+	 *
+	 * Check whether we can activate a new spare to be a replacement for
+	 * a disk that "wants" replacement.
+	 *
+	 * We don't check the array while any update is pending, as it might
+	 * contain a change (such as a spare assignment) which could affect our
+	 * decisions.
+	 */
 	if (a->check_replacement && !frozen &&
 	    update_queue == NULL && update_queue_pending == NULL) {
-		dprintf("disk replacement check...\n");
 		/*
 		 * check for disks being replaced and activate spares to replace them.
 		 */
@@ -828,8 +839,7 @@ static void manage_member(struct mdstat_ent *mdstat,
 				usleep(15*1000);
 			}
 			replace_array(container, a, newa);
-			if (sysfs_set_str(&a->info, NULL, "sync_action", "recover")
-			== 0)
+			if (sysfs_set_str(&a->info, NULL, "sync_action", "recover") == 0)
 				newa->prev_action = recover;
 
 			dprintf("recovery started on %s\n", a->info.sys_name);
@@ -841,6 +851,18 @@ out3:
 		sysfs_free(info);
 	}
 
+	/* Array Replacement Finish Check
+	 *
+	 * Check whether we can replace a disk that "wants" replacement with
+	 * a fully synchronized replacement spare that was previously
+	 * activated. Perform a disk replacemenet, which updates the metadata,
+	 * replacing the "faulty, want_replacement" disk with the synchronized
+	 * "spare" in the same raid disk slot.
+	 *
+	 * We don't check the array while any update is pending, as it might
+	 * contain a change (such as a spare assignment) which could affect our
+	 * decisions.
+	 */
 	if (update_queue == NULL && update_queue_pending == NULL) {
 		struct metadata_update *updates = NULL;
 		for (mdi = a->info.devs; mdi; mdi = mdi->next) {
