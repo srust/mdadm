@@ -5848,11 +5848,13 @@ static void ddf_update_vlist(struct ddf_super *ddf, struct dl *dl)
 					      &conf, &ibvd);
 		if (dn == DDF_NOTFOUND)
 			continue;
+
 		dprintf("dev pdnum:%d refnum:%08x has guid:%s (sec=%u) at %d\n",
 			dl->pdnum,
 			be32_to_cpu(dl->disk.refnum),
 			guid_str(conf->guid),
 			conf->sec_elmnt_seq, vn);
+
 		/* Clear the Transition flag */
 		if (be16_and
 		    (ddf->phys->entries[dl->pdnum].state,
@@ -5928,6 +5930,8 @@ static void ddf_process_conf_update(struct supertype *st,
 		unsigned int k;
 		unsigned int mppe = be16_to_cpu(ddf->anchor.max_primary_element_entries);
 		copy_matching_bvd(ddf, &vcl->conf, update);
+
+		/* Search the whole phys_refnum array for valid entries and print them */
 		for (k = 0; k < mppe; k++) {
 			if (be32_to_cpu(vcl->conf.phys_refnum[k]) == 0xffffffff)
 				continue;
@@ -6398,7 +6402,11 @@ static struct mdinfo *ddf_activate_spare(struct active_array *a,
 		i_prim = di->disk.raid_disk
 			% be16_to_cpu(vcl->conf.prim_elmnt_count);
 
-		// find open slot for replacement
+		/* find slot for replacement:
+		 * - we put replacement disks above the "primary element count"
+		 * - the raid disk number is used to place the replacement above the primary elements.
+		 * - e.g.: in a RAID 1.2 raid disk 0 replacement will be primary element count + 0, or 2 + 0.
+		 */
 		if (di->curr_state & DS_REPLACEMENT) {
 			i_prim = di->disk.raid_disk + be16_to_cpu(vcl->conf.prim_elmnt_count);
 		}
@@ -6410,8 +6418,7 @@ static struct mdinfo *ddf_activate_spare(struct active_array *a,
 			di->disk.minor,
 			i_prim);
 
-		vc = (struct vd_config *)(mu->buf
-					  + i_sec * ddf->conf_rec_len * 512);
+		vc = (struct vd_config *)(mu->buf + i_sec * ddf->conf_rec_len * 512);
 		for (dl = ddf->dlist; dl; dl = dl->next)
 			if (dl->major == di->disk.major &&
 			    dl->minor == di->disk.minor)
@@ -6425,7 +6432,11 @@ static struct mdinfo *ddf_activate_spare(struct active_array *a,
 		}
 		vc->phys_refnum[i_prim] = ddf->phys->entries[dl->pdnum].refnum;
 		LBA_OFFSET(ddf, vc)[i_prim] = cpu_to_be64(di->data_offset);
-		dprintf("BVD %u gets raiddisk:%u refnum:%08x at LBA offset 0x%llx\n", i_sec, i_prim,
+		dprintf("BVD %u gets %s raiddisk:%u index %d refnum:%08x at LBA offset 0x%llx\n",
+			i_sec,
+			di->curr_state & DS_REPLACEMENT ? "replacement" : "spare",
+			di->disk.raid_disk,
+			i_prim,
 			be32_to_cpu(vc->phys_refnum[i_prim]),
 			be64_to_cpu(LBA_OFFSET(ddf, vc)[i_prim]));
 	}

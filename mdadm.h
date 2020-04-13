@@ -1055,8 +1055,9 @@ extern struct superswitch {
 	 * there might be multiple missing devices and multiple spares
 	 * available.
 	 *
-	 * Optionally, select a disk for replacement by providing replace=1.
-	 * This ensures only a single replacement disk is activated.
+	 * Optionally, select a disk for replacement by providing the
+	 * 'replace_only' boolean set to 1.  This ensures a single disk
+	 * replacement disk only is activated.
 	 */
 	struct mdinfo *(*activate_spare)(struct active_array *a,
 					 int replace_only,
