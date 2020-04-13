@@ -460,7 +460,8 @@ static int read_and_act(struct active_array *a, fd_set *fds)
 				       DS_BLOCKED |
 				       DS_SPARE)) {
 
-			dprintf("disk%d (%d:%d) state: ",
+			dprintf("array%d: disk%d (%d:%d) state: ",
+				a->info.container_member,
 				mdi->disk.raid_disk,
 				mdi->disk.major,
 				mdi->disk.minor);
@@ -479,6 +480,7 @@ static int read_and_act(struct active_array *a, fd_set *fds)
 			}
 			if (mdi->curr_state & DS_REPLACEMENT) {
 				fprintf(stderr, "WANT_REPLACEMENT ");
+				mdi->replace = 1;
 			}
 			fprintf(stderr, "\n");
 		}

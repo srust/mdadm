@@ -637,12 +637,14 @@ static void manage_member(struct mdstat_ent *mdstat,
 	dprintf("frozen:        %d\n", frozen);
 
 	for (mdi = a->info.devs; mdi; mdi = mdi->next) {
-		dprintf("array%d disk%d (%d:%d) state %d\n",
+		dprintf("array%d disk%d (%d:%d) state %d %s\n",
 			a->info.container_member,
 			mdi->disk.raid_disk,
 			mdi->disk.major,
 			mdi->disk.minor,
-			mdi->curr_state);
+			mdi->curr_state,
+		        mdi->replace ? "(wants replacement)" : "");
+
 	}
 
 	if (sigterm && a->info.safe_mode_delay != 1) {
@@ -844,9 +846,15 @@ out3:
 		for (mdi = a->info.devs; mdi; mdi = mdi->next) {
 			updates = NULL;
 
-			if ((mdi->curr_state & (DS_FAULTY|DS_REPLACEMENT)) !=
-				(DS_FAULTY|DS_REPLACEMENT)) {
+			// check for replacement on faulty disks
+			if (!(mdi->curr_state & DS_FAULTY)) {
 				continue;
+			}
+
+			// disk marked for replacement in state or flag
+			if (!((mdi->curr_state & DS_REPLACEMENT) ||
+			      mdi->replace)) {
+			      	continue;
 			}
 
 			dprintf("REPLACE disk: %d (%d:%d)\n",
