@@ -39,6 +39,7 @@ static int misc_list(struct mddev_dev *devlist,
 		     char *dump_directory,
 		     struct supertype *ss, struct context *c);
 char Name[] = "mdadm";
+__thread const char *ThreadName = "";
 
 static int bb_compat = 0;
 

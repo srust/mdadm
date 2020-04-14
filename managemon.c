@@ -1171,6 +1171,8 @@ void do_manager(struct supertype *container)
 	sigdelset(&set, SIGUSR1);
 	sigdelset(&set, SIGTERM);
 
+	ThreadName = "manager:";
+
 	do {
 
 		if (exit_now)

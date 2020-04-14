@@ -805,7 +805,7 @@ static void reconcile_failed(struct active_array *aa, struct mdinfo *failed)
 }
 
 #ifdef DEBUG
-static void dprint_wake_reasons(fd_set *fds)
+static void wake_reasons(fd_set *fds)
 {
 	int i;
 	char proc_path[256];
@@ -813,7 +813,7 @@ static void dprint_wake_reasons(fd_set *fds)
 	char *basename;
 	int rv;
 
-	fprintf(stderr, "monitor: wake ( ");
+	dprintf("( ");
 	for (i = 0; i < FD_SETSIZE; i++) {
 		if (FD_ISSET(i, fds)) {
 			sprintf(proc_path, "/proc/%d/fd/%d",
@@ -933,7 +933,7 @@ static int wait_and_act(struct supertype *container, int nowait)
 		}
 		#ifdef DEBUG
 		else
-			dprint_wake_reasons(&rfds);
+			wake_reasons(&rfds);
 		#endif
 		container->retry_soon = 0;
 	}
@@ -997,6 +997,9 @@ void do_monitor(struct supertype *container)
 {
 	int rv;
 	int first = 1;
+
+	ThreadName = "monitor:";
+
 	do {
 		rv = wait_and_act(container, first);
 		first = 0;

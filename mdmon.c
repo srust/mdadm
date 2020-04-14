@@ -69,6 +69,7 @@
 #include	"mdvote.h"
 
 char Name[256] = "mdmon";
+__thread const char *ThreadName = "";
 
 struct active_array *discard_this;
 struct active_array *pending_discard;
@@ -395,7 +396,7 @@ int main(int argc, char *argv[])
 		exit(1);
 	}
 
-	snprintf((char *)Name, sizeof Name, "mdmon-%s", container_name);
+	snprintf((char *)Name, sizeof Name, "mdmon@%s", container_name);
 	return mdmon(devnm, dofork && do_fork(), takeover);
 }
 
