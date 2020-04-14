@@ -886,6 +886,7 @@ out3:
 
 			/* check for replacement complete */
 			a->container->ss->replace_disk(a, &mdi->disk, &updates);
+			a->container->ss->update_state(a->container);
 
 			/* queue any wait for metadata update */
 			queue_metadata_update(updates);
