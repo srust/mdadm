@@ -3504,7 +3504,7 @@ static int __write_ddf_structure(struct dl *d, struct ddf_super *ddf, __u8 type)
 		}
 		if (vdc) {
 			char nbuf[64];
-			dprintf("writing conf record %i on disk refnum:%08x for %s (%s) %u (%d bytes)\n",
+			dprintf(" writing conf record %i on disk refnum:%08x for %s (%s) %u (%d bytes)\n",
 					i, be32_to_cpu(d->disk.refnum),
 					guid_str(vdc->guid),
 					__fname_from_uuid((void *)vdc->uuid, 0, nbuf, ':'),
@@ -4695,13 +4695,13 @@ static int ddf_open_new(struct supertype *c, struct active_array *a, char *inst)
 			    dl->minor == dev->disk.minor)
 				break;
 		if (!dl || dl->pdnum < 0) {
-			pr_err("device %d/%d of subarray %d not found in meta data\n",
+			pr_err("device (%d:%d) of subarray %d not found in meta data\n",
 				dev->disk.major, dev->disk.minor, n);
 			return -1;
 		}
 		if ((be16_to_cpu(ddf->phys->entries[dl->pdnum].state) &
 			(DDF_Online|DDF_Missing|DDF_Failed)) != DDF_Online) {
-			pr_err("new subarray %d contains broken device %d/%d (%02x)\n",
+			pr_err("new subarray %d contains broken device (%d:%d) state:%02x\n",
 			       n, dl->major, dl->minor,
 			       be16_to_cpu(ddf->phys->entries[dl->pdnum].state));
 			if (write(dev->state_fd, faulty, sizeof(faulty)-1) !=
@@ -5098,7 +5098,6 @@ static void ddf_set_disk(struct active_array *a, mdu_disk_info_t *dsk, int state
 	/* and find the 'dl' entry corresponding to that. */
 	for (dl = ddf->dlist; dl; dl = dl->next)
 		if (mdi->state_fd >= 0 &&
-		    mdi->disk.raid_disk == dl->raiddisk && 
 		    mdi->disk.major == dl->major &&
 		    mdi->disk.minor == dl->minor)
 			break;
