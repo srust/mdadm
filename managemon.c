@@ -261,6 +261,17 @@ static void queue_metadata_update(struct metadata_update *mu)
 	*qp = mu;
 }
 
+static void
+wait_metadata_update(struct supertype *container)
+{
+	pthread_mutex_unlock(&array_lock);
+	while (update_queue_pending || update_queue) {
+		check_update_queue(container);
+		usleep(15*1000);
+	}
+	pthread_mutex_lock(&array_lock);
+}
+
 /*
  * Create and queue update structure about the removed disks.
  * The update is prepared by super type handler and passed to the monitor
@@ -633,28 +644,22 @@ static void manage_member(struct mdstat_ent *mdstat,
 		tv.tv_sec, tv.tv_usec);
 
 	for (mdi = a->info.devs; mdi; mdi = mdi->next) {
-		dprintf("array%d disk%d (%d:%d) state %d%s%s\n",
+		dprintf("array%d disk%d (%d:%d) state %d%s%s%s\n",
 			a->info.container_member,
 			mdi->disk.raid_disk,
 			mdi->disk.major,
 			mdi->disk.minor,
 			mdi->curr_state,
-		        mdi->replace ? " (wants replacement)" : "",
-		        mdi->faulty  ? " (faulty)" : "");
-
+			(mdi->curr_state & DS_INSYNC) ? ", online" : "",
+			mdi->remove ? ", removed" :
+		           mdi->replace ? ", wants_replacement" : "",
+		        mdi->faulty  ? ", faulty" : "");
 	}
 
 	if (sigterm && a->info.safe_mode_delay != 1) {
 		sysfs_set_safemode(&a->info, 1);
 		a->info.safe_mode_delay = 1;
 	}
-
-	dprintf("frozen:         %d\n", frozen);
-	dprintf("check_degraded: %d\n", a->check_degraded);
-	dprintf("check_reshape:  %d\n", a->check_reshape);
-	dprintf("check_replace:  %d\n", a->check_replacement);
-	dprintf("update_queue:   %p\n", update_queue);
-	dprintf("update_pending: %p\n", update_queue_pending);
 
 	/* Array Degraded Check
 	 *
@@ -716,10 +721,7 @@ static void manage_member(struct mdstat_ent *mdstat,
 		}
 		queue_metadata_update(updates);
 		updates = NULL;
-		while (update_queue_pending || update_queue) {
-			check_update_queue(container);
-			usleep(15*1000);
-		}
+		wait_metadata_update(container);
 		replace_array(container, a, newa);
 		if (sysfs_set_str(&a->info, NULL, "sync_action", "recover") == 0)
 			newa->prev_action = recover;
@@ -843,6 +845,7 @@ static void manage_member(struct mdstat_ent *mdstat,
 
 			queue_metadata_update(updates);
 			updates = NULL;
+			wait_metadata_update(container);
 			while (update_queue_pending || update_queue) {
 				check_update_queue(container);
 				usleep(15*1000);
@@ -883,14 +886,12 @@ out3:
 			}
 
 			// check for replacement on faulty disks
-			if (!((mdi->curr_state & DS_FAULTY) ||
-			       mdi->faulty)) {
+			if (!mdi->faulty) {
 				continue;
 			}
 
 			/* disk marked for replacement in state or flag */
-			if (!((mdi->curr_state & DS_REPLACEMENT) ||
-			       mdi->replace)) {
+			if (!mdi->replace) {
 			      	continue;
 			}
 
@@ -905,15 +906,11 @@ out3:
 				/* queue any wait for metadata update */
 				queue_metadata_update(updates);
 				updates = NULL;
-				while (update_queue_pending || update_queue) {
-					check_update_queue(container);
-					usleep(15*1000);
-				}
+				wait_metadata_update(container);
 
 				/* now remove the faulty */
 				mdi->remove = 1;
 			}
-
 		}
 	}
 

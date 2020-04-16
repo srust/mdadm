@@ -504,6 +504,7 @@ struct ddf_super {
 				int op_ok;
 				int readd;
 				int replace;
+				int remove;
 				int state;
 			};
 		};
@@ -5395,22 +5396,8 @@ ddf_replace_disk(struct active_array *a, mdu_disk_info_t *dsk,
 	vc->phys_refnum[new_bvd]     = cpu_to_be32(0xFFFFFFFF);
 	LBA_OFFSET(ddf, vc)[cur_bvd] = LBA_OFFSET(ddf, vc)[new_bvd];
 
-	/*
-	 * remove "disk being replaced" from dlist.
-	 *
-	 * This will cause metadata update to remove the physical disk from
-	 * metadata
-	 */
-	struct dl **dlp;
-	for (dlp = &ddf->dlist; *dlp; dlp = &(*dlp)->next) {
-		struct dl *dl = *dlp;
-		if (dl->pdnum == dl_cur->pdnum) {
-			close(dl->fd);
-			dl->fd = -1;
-			*dlp = dl->next;
-			break;
-		}
-	}
+	/* mark current disk to be removed; after replacement */
+	dl_cur->remove = 1;
 
 	// Blockbridge:
 	//
@@ -5539,12 +5526,6 @@ static int ddf_probe_device(struct supertype *st, struct dl *d)
 		state, d->major, d->minor);
 
 	if ((state & (DDF_Failed|DDF_Rebuilding|DDF_Missing))) {
-		if (state & DDF_Failed)
-			dprintf("fd:%d state:failed\n", fd);
-		else if (state & DDF_Rebuilding)
-			dprintf("fd:%d state:rebuilding\n", fd);
-		else
-			dprintf("fd:%d state:missing\n", fd);
 		return 0;
 	}
 
@@ -5792,7 +5773,10 @@ static void ddf_remove_failed(struct ddf_super *ddf)
 			 be16_and(state, cpu_to_be16(DDF_Failed))) ||
 			be16_and(type, cpu_to_be16(DDF_Global_Spare))) {
 			/* skip this one unless in dlist*/
-			for (dl = ddf->dlist; dl; dl = dl->next)
+			for (dl = ddf->dlist; dl; dl = dl->next) {
+				/* skip "removing" disks */
+				if (dl->remove)
+					continue;
 				if (dl->pdnum == (int)pdnum) {
 					dprintf("-> keeping physical disk for pdnum:%u (%d:%d) refnum:%08x\n",
 						pdnum,
@@ -5801,6 +5785,7 @@ static void ddf_remove_failed(struct ddf_super *ddf)
 						be32_to_cpu(ddf->phys->entries[pdnum].refnum));
 					break;
 				}
+			}
 			if (!dl) {
 				dprintf("-> removing physical disk for pdnum:%u refnum:%08x\n",
 					pdnum,
@@ -5825,6 +5810,23 @@ static void ddf_remove_failed(struct ddf_super *ddf)
 		       DDF_GUID_LEN);
 		ddf->phys->entries[pd2].refnum = cpu_to_be32(0xFFFFFFFF);
 		pd2++;
+	}
+
+	/*
+	 * remove "disk being removed" from dlist.
+	 *
+	 * This will cause metadata update to remove the physical disk from
+	 * metadata
+	 */
+	struct dl **dlp;
+	for (dlp = &ddf->dlist; *dlp; dlp = &(*dlp)->next) {
+		struct dl *dl = *dlp;
+		if (dl->remove) {
+			close(dl->fd);
+			dl->fd = -1;
+			*dlp = dl->next;
+			break;
+		}
 	}
 }
 

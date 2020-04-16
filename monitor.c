@@ -458,11 +458,12 @@ static int read_and_act(struct active_array *a, fd_set *fds)
 			mdi->curr_state = read_dev_state(mdi->state_fd);
 		}
 
-		dprintf("array%d: disk%d (%d:%d) state: ",
+		dprintf("array%d: disk%d (%d:%d) state: %d: ",
 			a->info.container_member,
 			mdi->disk.raid_disk,
 			mdi->disk.major,
-			mdi->disk.minor);
+			mdi->disk.minor,
+			mdi->curr_state);
 
 		if (mdi->curr_state & (DS_WRITE_ERROR |
 				       DS_FAULTY |
@@ -490,8 +491,9 @@ static int read_and_act(struct active_array *a, fd_set *fds)
 		}
 
 		fprintf(stderr, "%s%s%s\n",
-			mdi->curr_state == 0 ? "online" : "",
-		        mdi->replace ? " (wants replacement)" : "",
+			(mdi->curr_state & DS_INSYNC) ? "online" : "",
+			mdi->remove ? " (removed)" :
+		            mdi->replace ? " (wants replacement)" : "",
 		        mdi->faulty  ? " (faulty)" : "");
 
 		/*
@@ -767,8 +769,6 @@ static int read_and_act(struct active_array *a, fd_set *fds)
 		mdi->prev_state = mdi->curr_state;
 		mdi->next_state = 0;
 	}
-
-	dprintf("check replacement: %d\n", check_replacement);
 
 	if (check_degraded ||
 	    check_reshape ||
