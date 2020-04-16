@@ -50,6 +50,7 @@ struct active_array {
 	int check_degraded; /* flag set by mon, read by manage */
 	int check_reshape; /* flag set by mon, read by manage */
 	int check_replacement; /* flag set by mon, read by manage */
+	int check_remove; /* flag set by mon, read by manage */
 };
 
 /*
@@ -86,6 +87,7 @@ extern int exit_now, manager_ready;
 extern int mon_tid, mgr_tid;
 extern int monitor_loop_cnt;
 extern int probe_enabled;
+extern pthread_mutex_t array_lock;
 
 /* helper routine to determine resync completion since MaxSector is a
  * moving target

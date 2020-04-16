@@ -534,6 +534,7 @@ static int validate_geometry_ddf_bvd(struct supertype *st,
 
 static void free_super_ddf(struct supertype *st);
 static int all_ff(const char *guid);
+static int find_phys(const struct ddf_super *ddf, be32 phys_refnum);
 static unsigned int get_pd_index_from_refnum(const struct vcl *vc,
 					     be32 refnum, unsigned int nmax,
 					     const struct vd_config **bvd,
@@ -2191,8 +2192,8 @@ update_index_for_bvd(const struct ddf_super *ddf,
 			return 0;
 		}
 	}
-	dprintf("couldn't find BVD member raiddisk:%u (total %u)\n",
-		dl->raiddisk, be16_to_cpu(conf->prim_elmnt_count));
+	dprintf("couldn't find BVD member refnum:%08x (total %u)\n",
+		be32_to_cpu(dl->disk.refnum), be16_to_cpu(conf->prim_elmnt_count));
 	return -1;
 }
 
@@ -3647,19 +3648,19 @@ static int __write_init_super_ddf(struct supertype *st, int *enough_out)
 			}
 
 			dprintf("skipping %s device: %s"
-				"fd:%d pdnum:%d raiddisk:%d refnum:%08x "
+				"fd:%-2d pdnum:%d refnum:%08x "
 				"state:%u %d:%d\n",
 				desc,
 				pad,
-				d->fd, d->pdnum, d->raiddisk,
+				d->fd, d->pdnum,
 				be32_to_cpu(d->disk.refnum),
 				state, d->major, d->minor);
 			continue;
 		}
 		dprintf("writing online device:  "
-			"fd:%d pdnum:%d raiddisk:%d refnum:%08x "
+			"fd:%-2d pdnum:%d refnum:%08x "
 			"state:%u %d:%d\n",
-			d->fd, d->pdnum, d->raiddisk,
+			d->fd, d->pdnum,
 			be32_to_cpu(d->disk.refnum),
 			state, d->major, d->minor);
 		int ok = _write_super_to_disk(ddf, d);
@@ -5097,7 +5098,7 @@ static void ddf_set_disk(struct active_array *a, mdu_disk_info_t *dsk, int state
 		    mdi->disk.minor == dsk->minor)
 			break;
 	if (!mdi) {
-		pr_err("cannot find raiddisk:%d (%d:%d)\n",
+		pr_err("cannot find raiddisk:%d (%d:%d): no raid disk\n",
 		       dsk->raid_disk, dsk->major, dsk->minor);
 		return;
 	}
@@ -5109,7 +5110,7 @@ static void ddf_set_disk(struct active_array *a, mdu_disk_info_t *dsk, int state
 		    mdi->disk.minor == dl->minor)
 			break;
 	if (!dl) {
-		pr_err("cannot find raiddisk:%d (%d:%d)\n",
+		pr_err("cannot find raiddisk:%d (%d:%d): no fd\n",
 		       n, mdi->disk.major, mdi->disk.minor);
 		return;
 	}
@@ -5262,7 +5263,7 @@ ddf_replace_disk(struct active_array *a, mdu_disk_info_t *dsk,
 	}
 
 	/* disk must be faulty to be replaced */
-	if (!(mdi->curr_state & DS_FAULTY)) {
+	if (!mdi->faulty) {
 		pr_err("disk to be replaced is not faulty raiddisk:%d (%d:%d)\n",
 		       dsk->raid_disk, dsk->major, dsk->minor);
 		return;
@@ -5387,9 +5388,6 @@ ddf_replace_disk(struct active_array *a, mdu_disk_info_t *dsk,
 	for (j = 1; j < vcl->conf.sec_elmnt_count; j++)
 		memcpy(mu->buf + j * ddf->conf_rec_len * 512,
 		       vcl->other_bvds[j-1], ddf->conf_rec_len * 512);
-
-	/* update raiddisk for replacement */
-	dl_new->raiddisk = n;
 
 	/* update config records for replacement */
 	vc = (struct vd_config *)mu->buf;
@@ -5796,9 +5794,8 @@ static void ddf_remove_failed(struct ddf_super *ddf)
 			/* skip this one unless in dlist*/
 			for (dl = ddf->dlist; dl; dl = dl->next)
 				if (dl->pdnum == (int)pdnum) {
-					dprintf("-> keeping physical disk for pdnum:%u raiddisk:%d (%d:%d) refnum:%08x\n",
+					dprintf("-> keeping physical disk for pdnum:%u (%d:%d) refnum:%08x\n",
 						pdnum,
-						dl->raiddisk,
 						dl->major,
 						dl->minor,
 						be32_to_cpu(ddf->phys->entries[pdnum].refnum));

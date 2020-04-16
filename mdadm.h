@@ -324,7 +324,9 @@ struct mdinfo {
 	#define DS_WRITE_ERROR  4096
 	#define DS_REPLACEMENT  8192
 	int prev_state, curr_state, next_state;
+	int faulty;
 	int replace;
+	int remove;
 
 	/* info read from sysfs */
 	char		sysfs_array_state[20];

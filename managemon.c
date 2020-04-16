@@ -107,6 +107,7 @@
 #include	<sys/syscall.h>
 #include	<sys/socket.h>
 #include	<signal.h>
+#include <pthread.h>
 
 static void close_aa(struct active_array *aa)
 {
@@ -632,13 +633,14 @@ static void manage_member(struct mdstat_ent *mdstat,
 		tv.tv_sec, tv.tv_usec);
 
 	for (mdi = a->info.devs; mdi; mdi = mdi->next) {
-		dprintf("array%d disk%d (%d:%d) state %d %s\n",
+		dprintf("array%d disk%d (%d:%d) state %d%s%s\n",
 			a->info.container_member,
 			mdi->disk.raid_disk,
 			mdi->disk.major,
 			mdi->disk.minor,
 			mdi->curr_state,
-		        mdi->replace ? "(wants replacement)" : "");
+		        mdi->replace ? " (wants replacement)" : "",
+		        mdi->faulty  ? " (faulty)" : "");
 
 	}
 
@@ -646,6 +648,13 @@ static void manage_member(struct mdstat_ent *mdstat,
 		sysfs_set_safemode(&a->info, 1);
 		a->info.safe_mode_delay = 1;
 	}
+
+	dprintf("frozen:         %d\n", frozen);
+	dprintf("check_degraded: %d\n", a->check_degraded);
+	dprintf("check_reshape:  %d\n", a->check_reshape);
+	dprintf("check_replace:  %d\n", a->check_replacement);
+	dprintf("update_queue:   %p\n", update_queue);
+	dprintf("update_pending: %p\n", update_queue_pending);
 
 	/* Array Degraded Check
 	 *
@@ -669,7 +678,7 @@ static void manage_member(struct mdstat_ent *mdstat,
 		 */
 		newdev = container->ss->activate_spare(a, 0, &updates);
 		if (!newdev)
-			return;
+			goto out;
 
 		newa = duplicate_aa(a);
 		if (!newa)
@@ -863,19 +872,25 @@ out3:
 	 * contain a change (such as a spare assignment) which could affect our
 	 * decisions.
 	 */
-	if (update_queue == NULL && update_queue_pending == NULL) {
+	if (!frozen && update_queue == NULL && update_queue_pending == NULL) {
 		struct metadata_update *updates = NULL;
 		for (mdi = a->info.devs; mdi; mdi = mdi->next) {
 			updates = NULL;
 
-			// check for replacement on faulty disks
-			if (!(mdi->curr_state & DS_FAULTY)) {
+			// already replaced
+			if (mdi->remove) {
 				continue;
 			}
 
-			// disk marked for replacement in state or flag
+			// check for replacement on faulty disks
+			if (!((mdi->curr_state & DS_FAULTY) ||
+			       mdi->faulty)) {
+				continue;
+			}
+
+			/* disk marked for replacement in state or flag */
 			if (!((mdi->curr_state & DS_REPLACEMENT) ||
-			      mdi->replace)) {
+			       mdi->replace)) {
 			      	continue;
 			}
 
@@ -886,20 +901,28 @@ out3:
 
 			/* check for replacement complete */
 			a->container->ss->replace_disk(a, &mdi->disk, &updates);
-			a->container->ss->update_state(a->container);
+			if (updates) {
+				/* queue any wait for metadata update */
+				queue_metadata_update(updates);
+				updates = NULL;
+				while (update_queue_pending || update_queue) {
+					check_update_queue(container);
+					usleep(15*1000);
+				}
 
-			/* queue any wait for metadata update */
-			queue_metadata_update(updates);
-			updates = NULL;
-			while (update_queue_pending || update_queue) {
-				check_update_queue(container);
-				usleep(15*1000);
+				/* now remove the faulty */
+				mdi->remove = 1;
 			}
 
-			struct active_array *newa = duplicate_aa(a);
-			if (newa)
-				replace_array(container, a, newa);
 		}
+	}
+
+	if (a->check_remove) {
+		dprintf("checking remove...\n");
+		a->check_remove = 0;
+		struct active_array *newa = duplicate_aa(a);
+		if (newa)
+			replace_array(container, a, newa);
 	}
 }
 
@@ -1069,8 +1092,11 @@ void manage(struct mdstat_ent *mdstat, struct supertype *container)
 		/* Looks like a member of this container */
 		for (a = container->arrays; a; a = a->next) {
 			if (strcmp(mdstat->devnm, a->info.sys_name) == 0) {
-				if (a->container && a->to_remove == 0)
+				if (a->container && a->to_remove == 0) {
+					pthread_mutex_lock(&array_lock);
 					manage_member(mdstat, a);
+					pthread_mutex_unlock(&array_lock);
+				}
 				break;
 			}
 		}
@@ -1168,13 +1194,12 @@ void do_manager(struct supertype *container)
 	struct mdstat_ent *mdstat;
 	sigset_t set;
 
-	sigprocmask(SIG_UNBLOCK, NULL, &set);
-	sigdelset(&set, SIGUSR1);
-	sigdelset(&set, SIGTERM);
-
 	ThreadName = "manager:";
 
 	do {
+		sigprocmask(SIG_UNBLOCK, NULL, &set);
+		sigdelset(&set, SIGUSR1);
+		sigdelset(&set, SIGTERM);
 
 		if (exit_now)
 			exit(0);

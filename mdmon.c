@@ -73,6 +73,7 @@ __thread const char *ThreadName = "";
 
 struct active_array *discard_this;
 struct active_array *pending_discard;
+pthread_mutex_t      array_lock;
 
 int mon_tid, mgr_tid;
 
@@ -457,6 +458,7 @@ static int mdmon(char *devnm, int must_fork, int takeover)
 	strcpy(container->devnm, devnm);
 	container->arrays = NULL;
 	container->sock = -1;
+	pthread_mutex_init(&array_lock, NULL);
 
 	mdi = sysfs_read(mdfd, container->devnm, GET_VERSION|GET_LEVEL|GET_DEVS);
 
