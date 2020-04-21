@@ -3658,7 +3658,7 @@ static int __write_init_super_ddf(struct supertype *st, int *enough_out)
 				state, d->major, d->minor);
 			continue;
 		}
-		dprintf("writing online device:  "
+		dprintf("writing online device:   "
 			"fd:%-2d pdnum:%d refnum:%08x "
 			"state:%u %d:%d\n",
 			d->fd, d->pdnum,
@@ -4924,6 +4924,7 @@ ddf_update_state(struct supertype *st)
 			map_num(ddf_state, state));
 		ddf->virt->entries[0].state = upp | state;
 		ddf_set_updates_pending(ddf, vc);
+		return 1;
 	}
 
 	return 0;
@@ -5076,8 +5077,13 @@ static int get_svd_state(const struct ddf_super *ddf, const struct vcl *vcl)
  * The mdu_disk_into_t is specified for the disk to set, as that includes the disk
  * major/minor, and not just the raid disk number offset, 
  * to ensure that the correct disk is being set.
+ *
+ * returns 1 (TRUE)  if disk state was updated
+ * returns 0 (FALSE) if disk state update was not required
+ * returns -1 (FAIL) if disk could not be found.
  */
-static void ddf_set_disk(struct active_array *a, mdu_disk_info_t *dsk, int state)
+static int
+ddf_set_disk(struct active_array *a, mdu_disk_info_t *dsk, int state)
 {
 	struct ddf_super *ddf = a->container->sb;
 	unsigned int inst = a->info.container_member, n_bvd;
@@ -5101,7 +5107,7 @@ static void ddf_set_disk(struct active_array *a, mdu_disk_info_t *dsk, int state
 	if (!mdi) {
 		pr_err("cannot find raiddisk:%d (%d:%d): no raid disk\n",
 		       dsk->raid_disk, dsk->major, dsk->minor);
-		return;
+		return -1;
 	}
 
 	/* and find the 'dl' entry corresponding to that. */
@@ -5113,14 +5119,14 @@ static void ddf_set_disk(struct active_array *a, mdu_disk_info_t *dsk, int state
 	if (!dl) {
 		pr_err("cannot find raiddisk:%d (%d:%d): no fd\n",
 		       n, mdi->disk.major, mdi->disk.minor);
-		return;
+		return -1;
 	}
 
 	struct vd_config *vc = find_vdcr(ddf, inst, (unsigned int)dsk->raid_disk,
 					 &n_bvd, &vcl);
 	if (vc == NULL) {
 		dprintf("ddf: cannot find instance %d!!\n", inst);
-		return;
+		return -1;
 	}
 
 	dprintf("bvd index found for %d: %d:%d, index: %d\n",
@@ -5135,7 +5141,7 @@ static void ddf_set_disk(struct active_array *a, mdu_disk_info_t *dsk, int state
 	if (ret) {
 		dprintf("unable to validate disk refnum for physical disk %d: %d:%d\n",
 			dl->pdnum, dl->major, dl->minor);
-		return;
+		return -1;
 	}
 
 	dprintf("bvd index found for %d: %d:%d, index: %d\n",
@@ -5180,11 +5186,13 @@ static void ddf_set_disk(struct active_array *a, mdu_disk_info_t *dsk, int state
 		}
 	}
 
-	dprintf("ddf: set_disk raiddisk:%d refnum:%08x to %x->%02x%s\n",
-		n,
-                be32_to_cpu(dl->disk.refnum), state,
-                be16_to_cpu(ddf->phys->entries[pd].state),
-                (state & DS_FAULTY) ? " (faulty)" : "");
+	if (update) {
+		dprintf("ddf: set_disk raiddisk:%d refnum:%08x to %x->%02x%s\n",
+			n,
+			be32_to_cpu(dl->disk.refnum), state,
+			be16_to_cpu(ddf->phys->entries[pd].state),
+			(state & DS_FAULTY) ? " (faulty)" : "");
+	}
 
 	/* Now we need to check the state of the array and update
 	 * virtual_disk.entries[n].state.
@@ -5206,6 +5214,8 @@ static void ddf_set_disk(struct active_array *a, mdu_disk_info_t *dsk, int state
 		if (fail_transition)
 		    ddf_set_update_assembly_seq(ddf);
 	}
+
+	return update;
 }
 
 /*
@@ -6191,7 +6201,7 @@ static struct mdinfo *ddf_activate_spare(struct active_array *a,
 			return NULL;
 		if (d->state_fd >= 0)
 			working++;
-		if (d->curr_state & DS_REPLACEMENT)
+		if (d->curr_state & DS_WANT_REPLACEMENT)
 			replacement++;
 	}
 
@@ -6240,8 +6250,10 @@ static struct mdinfo *ddf_activate_spare(struct active_array *a,
 		int replace = 0;
 		if (d) {
 			if (replace_only)
-				replace = (d->curr_state & DS_REPLACEMENT);
-			dprintf("found %d: %p %x%s\n", i, d, d?d->curr_state:0,
+				replace = (d->curr_state & DS_WANT_REPLACEMENT);
+			dprintf("found raiddisk:%d (%d:%d) state:%d%s\n",
+				i, d->disk.major, d->disk.minor,
+				d->curr_state,
 				replace ? " (wants replacement) " : "");
 			if (d->state_fd >= 0 && !replace)
 				continue;
@@ -6249,6 +6261,9 @@ static struct mdinfo *ddf_activate_spare(struct active_array *a,
 
 		/* OK, this device needs recovery.  Find a spare */
 	again:
+		dprintf("looking for spare for raiddisk:%d (%s)\n",
+			i, global_ok ? "global spares" : "local spares");
+
 		for ( ; dl ; dl = dl->next) {
 			unsigned long long esize;
 			unsigned long long pos;
@@ -6340,7 +6355,7 @@ static struct mdinfo *ddf_activate_spare(struct active_array *a,
 			di->recovery_start = 0;
 			di->data_offset = pos;
 			di->component_size = a->info.component_size;
-			di->curr_state = replace ? DS_REPLACEMENT : 0;
+			di->curr_state = replace ? DS_WANT_REPLACEMENT : 0;
 			di->next = rv;
 			rv = di;
 			const char *detail = dl->readd ? "(re-add)" : replace ? "(replace)" : "(new)";
@@ -6407,12 +6422,12 @@ static struct mdinfo *ddf_activate_spare(struct active_array *a,
 		 * - the raid disk number is used to place the replacement above the primary elements.
 		 * - e.g.: in a RAID 1.2 raid disk 0 replacement will be primary element count + 0, or 2 + 0.
 		 */
-		if (di->curr_state & DS_REPLACEMENT) {
+		if (di->curr_state & DS_WANT_REPLACEMENT) {
 			i_prim = di->disk.raid_disk + be16_to_cpu(vcl->conf.prim_elmnt_count);
 		}
 
 		dprintf("%s disk: %d (%d:%d) primary index %d\n",
-			di->curr_state & DS_REPLACEMENT ? "replacement" : "spare",
+			di->curr_state & DS_WANT_REPLACEMENT ? "replacement" : "spare",
 			di->disk.raid_disk,
 			di->disk.major,
 			di->disk.minor,
@@ -6430,12 +6445,12 @@ static struct mdinfo *ddf_activate_spare(struct active_array *a,
 			// XXX: memory leak here for 'mu' and 'rv'
 			return NULL;
 		}
-		dl->replace = (di->curr_state & DS_REPLACEMENT);
+		dl->replace = (di->curr_state & DS_WANT_REPLACEMENT);
 		vc->phys_refnum[i_prim] = ddf->phys->entries[dl->pdnum].refnum;
 		LBA_OFFSET(ddf, vc)[i_prim] = cpu_to_be64(di->data_offset);
 		dprintf("BVD %u gets %s raiddisk:%u index %d refnum:%08x at LBA offset 0x%llx\n",
 			i_sec,
-			di->curr_state & DS_REPLACEMENT ? "replacement" : "spare",
+			di->curr_state & DS_WANT_REPLACEMENT ? "replacement" : "spare",
 			di->disk.raid_disk,
 			i_prim,
 			be32_to_cpu(vc->phys_refnum[i_prim]),

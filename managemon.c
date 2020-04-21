@@ -644,16 +644,17 @@ static void manage_member(struct mdstat_ent *mdstat,
 		tv.tv_sec, tv.tv_usec);
 
 	for (mdi = a->info.devs; mdi; mdi = mdi->next) {
-		dprintf("array%d disk%d (%d:%d) state %d%s%s%s\n",
+		dprintf("array%d disk%d (%d:%d) state %d%s%s%s%s%s\n",
 			a->info.container_member,
 			mdi->disk.raid_disk,
 			mdi->disk.major,
 			mdi->disk.minor,
 			mdi->curr_state,
 			(mdi->curr_state & DS_INSYNC) ? ", online" : "",
-			mdi->remove ? ", removed" :
-		           mdi->replace ? ", wants_replacement" : "",
-		        mdi->faulty  ? ", faulty" : "");
+			mdi->remove ? ", removed" : "",
+		        mdi->faulty ? ", faulty" : "",
+		        ((mdi->curr_state & DS_WANT_REPLACEMENT) || mdi->replace) ? ", want_replacement" : "",
+		        (mdi->curr_state & DS_REPLACEMENT) ? ", replacement" : "");
 	}
 
 	if (sigterm && a->info.safe_mode_delay != 1) {
@@ -808,7 +809,7 @@ static void manage_member(struct mdstat_ent *mdstat,
 
 		/* check disk states for those wanting replacement */
 		for (d = info->devs; d; d = d->next) {
-			dprintf("disk in array: %d:%d state: %d\n",
+			dprintf("disk in array: %d:%d sysfs state: %d\n",
 				d->disk.major, d->disk.minor, d->disk.state);
 			if (d->disk.raid_disk < 0)
 				continue;
