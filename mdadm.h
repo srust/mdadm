@@ -1173,6 +1173,7 @@ struct supertype {
 			 */
 	int devcnt;
 	int retry_soon;
+	int retry_later;
 	int nodes;
 	char *cluster_name;
 

@@ -353,25 +353,30 @@ static void signal_manager(void)
 	syscall(SYS_tgkill, pid, mgr_tid, SIGUSR1);
 }
 
-
 /*
- * Ensure other disks besides the current one are all online/insync.
+ * Ensure a drive other than the one in question is marked as insync and
+ * replacement. insync means the replacement drive has completed its recovery
+ * resync and is no longer a spare. it is still marked spare during the
+ * recovery.
+ *
  * return 1 (TRUE) if all disks besides mdi are DS_INSYNC
+ *
  * return 0 (FALSE) if any other disk besides mdi is not DS_INSYNC
  */
 static int
-other_disks_insync(struct active_array *a, struct mdinfo *mdi)
+replacement_available(struct active_array *a, struct mdinfo *mdi)
 {
 	struct mdinfo *d;
 
 	for (d = a->info.devs; d; d = d->next) {
 		if (d == mdi)
 			continue;
-		if (d->curr_state != DS_INSYNC)
-			return 0;
+		if ((d->curr_state & DS_INSYNC) &&
+		    (d->curr_state & DS_REPLACEMENT))
+			return 1;
 	}
 
-	return 1;
+	return 0;
 }
 
 /* faulty processing
@@ -380,49 +385,35 @@ other_disks_insync(struct active_array *a, struct mdinfo *mdi)
  *
  * For disk replacement:
  *
- *     Don't mark faulty:
- *       if replace and !recovery
- *     OR
- *       if replace and recovery and no spares
+ *     Don't mark faulty: if replace and replacement available
  *
- *     Mark faulty if: not replace OR replace and recovery and other
- *     disks are SPARE
+ *     We must not mark faulty yet, if the disk is being replaced and
+ *     a replacement is available. This is if we are in the middle of recovery,
+ *     or if recovery has completed.
  *
- *     We must not mark faulty yet, if we are in recovery but no more
- *     disks are marked spare. This means recovery has completed to
- *     those disks and we must transition through a disk replacement,
- *     which is handled through the manager.
+ *     NOTE: replacement available means the replacement disk is INSYNC and
+ *     marked as REPLACEMENT. This means the recovery has actually completed to
+ *     the replacement disk, even if the recovery state has not updated yet. We
+ *     must transition through a disk replacement, which is handled through the
+ *     manager.
  *
- *     However, if we are recovering, but still have a SPARE disk, we
- *     must mark this faulty disk as faulty immediately, so that we do
- *     not make further progress and device probing has the correct
- *     information.
+ *     However, if we are recovering, but no replacement is available, we must
+ *     mark this faulty disk as faulty immediately, so that we do not make
+ *     further progress and device probing has the correct information.
  *
  * For non-disk-replacement mode, always mark faulty immediately.
  *
  * returns 1 if disk updated
  * returns 0 if update not required
  */
-
 static int
 process_faulty(struct active_array *a, struct mdinfo *mdi)
 {
 	int update;
 
-	/* disk replacement and no recovery: transition */
-	if (mdi->replace && a->curr_action == idle) {
-		dprintf("replacement disk skip faulty: %d (%d:%d)\n",
-			mdi->disk.raid_disk,
-			mdi->disk.major,
-			mdi->disk.minor);
-	    	return 0;
-	}
-
-	/* disk replacement and recovery but no spares: transition */
-	if (mdi->replace &&
-	    a->curr_action != idle &&
-	    other_disks_insync(a, mdi)) {
-		dprintf("replacement disk skip faulty: %d (%d:%d)\n",
+	/* disk replacement faulty but replacement available: transition */
+	if (mdi->replace && replacement_available(a, mdi)) {
+		dprintf("replacement disk available skip faulty: %d (%d:%d)\n",
 			mdi->disk.raid_disk,
 			mdi->disk.major,
 			mdi->disk.minor);
@@ -859,8 +850,9 @@ static int read_and_act(struct active_array *a, fd_set *fds)
 				close(mdi->ubb_fd);
 				mdi->state_fd = -1;
 				check_remove = 1;
-			} else
+			} else {
 				ret |= ARRAY_BUSY;
+			}
 		}
 		if (mdi->next_state & DS_INSYNC) {
 			write_attr("+in_sync", mdi->state_fd);
@@ -941,9 +933,12 @@ static void wake_reasons(struct supertype *container, fd_set *fds)
 	int rv;
 
 	dprintf("(");
-	if (container->retry_soon) {
+	if (container->retry_soon || container->retry_later) {
 		any = 1;
-		fprintf(stderr, "retry");
+		if (container->retry_soon)
+			fprintf(stderr, "retry-soon");
+		if (container->retry_later)
+			fprintf(stderr, "retry-later");
 	}
 	for (i = 0; i < FD_SETSIZE; i++) {
 		if (FD_ISSET(i, fds)) {
@@ -1050,8 +1045,12 @@ static int wait_and_act(struct supertype *container, int nowait)
 		ts.tv_nsec = 0;
 		if (*aap == NULL || container->retry_soon) {
 			/* just waiting to get O_EXCL access */
-			ts.tv_sec = 0;
+			ts.tv_sec  = 0;
 			ts.tv_nsec = 20000000ULL;
+		}
+		if (container->retry_later) {
+			ts.tv_sec  = 1;
+			ts.tv_nsec = 0;
 		}
 		sigprocmask(SIG_UNBLOCK, NULL, &set);
 		sigdelset(&set, SIGUSR1);
@@ -1072,7 +1071,8 @@ static int wait_and_act(struct supertype *container, int nowait)
 			wake_reasons(container, &rfds);
 		}
 		#endif
-		container->retry_soon = 0;
+		container->retry_soon  = 0;
+		container->retry_later = 0;
 	}
 
 	if (update_queue) {
@@ -1115,8 +1115,12 @@ static int wait_and_act(struct supertype *container, int nowait)
 			 */
 			if (sigterm && !(ret & ARRAY_DIRTY))
 				a->container = NULL; /* stop touching this array */
-			if (ret & ARRAY_BUSY)
-				container->retry_soon = 1;
+			if (ret & ARRAY_BUSY) {
+				if (a->curr_action != idle)
+					container->retry_later = 1;
+				else
+					container->retry_soon = 1;
+			}
 		}
 	}
 
