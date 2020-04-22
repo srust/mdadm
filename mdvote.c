@@ -22,7 +22,7 @@
 #ifndef dprintf
 #define DEBUG 1
 #ifdef DEBUG
-extern char Name[];
+extern __thread const char *Name;
 #define dprintf(fmt, arg...) \
 	fprintf(stderr, "%s: %s: "fmt, Name, __func__, ##arg)
 #define dprintf_cont(fmt, arg...) \

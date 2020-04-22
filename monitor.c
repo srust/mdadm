@@ -348,8 +348,6 @@ static void signal_manager(void)
 {
 	/* tgkill(getpid(), mon_tid, SIGUSR1); */
 	int pid = getpid();
-	dprintf("mon_tid: %d\n", mon_tid);
-	dprintf("mgr_tid: %d\n", mgr_tid);
 	syscall(SYS_tgkill, pid, mgr_tid, SIGUSR1);
 }
 
@@ -1141,7 +1139,7 @@ void do_monitor(struct supertype *container)
 	int rv;
 	int first = 1;
 
-	ThreadName = "monitor:";
+	Name = "monitor";
 
 	do {
 		rv = wait_and_act(container, first);

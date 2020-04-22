@@ -38,8 +38,7 @@ static int misc_list(struct mddev_dev *devlist,
 		     struct mddev_ident *ident,
 		     char *dump_directory,
 		     struct supertype *ss, struct context *c);
-char Name[] = "mdadm";
-__thread const char *ThreadName = "";
+__thread const char *Name = "mdadm";
 
 static int bb_compat = 0;
 

@@ -1199,7 +1199,7 @@ void do_manager(struct supertype *container)
 	struct mdstat_ent *mdstat;
 	sigset_t set;
 
-	ThreadName = "manager:";
+	Name = "manager";
 
 	do {
 		sigprocmask(SIG_UNBLOCK, NULL, &set);

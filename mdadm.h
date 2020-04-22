@@ -235,8 +235,7 @@ struct dlm_lksb {
 
 #define ARRAY_SIZE(x) (sizeof(x)/sizeof(x[0]))
 
-extern char Name[];
-extern __thread const char *ThreadName;
+extern __thread const char *Name;
 
 struct md_bb_entry {
 	unsigned long long sector;
@@ -1644,12 +1643,12 @@ static inline char *to_subarray(struct mdstat_ent *ent, char *container)
 #define DEBUG 1
 #ifdef DEBUG
 #define dprintf(fmt, arg...) \
-	fprintf(stderr, "%s: %s%s: "fmt, Name, ThreadName, __func__, ##arg)
+	fprintf(stderr, "%s: %s: "fmt, Name, __func__, ##arg)
 #define dprintf_cont(fmt, arg...) \
 	fprintf(stderr, fmt, ##arg)
 #else
 #define dprintf(fmt, arg...) \
-        ({ if (0) fprintf(stderr, "%s: %s%s: " fmt, Name, ThreadName, __func__, ##arg); 0; })
+        ({ if (0) fprintf(stderr, "%s: %s: " fmt, Name, __func__, ##arg); 0; })
 #define dprintf_cont(fmt, arg...) \
         ({ if (0) fprintf(stderr, fmt, ##arg); 0; })
 #endif
@@ -1666,7 +1665,7 @@ static inline int xasprintf(char **strp, const char *fmt, ...) {
 }
 
 #ifdef DEBUG
-#define pr_err(fmt, args...) fprintf(stderr, "%s: %s%s: "fmt, Name, ThreadName, __func__, ##args)
+#define pr_err(fmt, args...) fprintf(stderr, "%s: %s: "fmt, Name, __func__, ##args)
 #else
 #define pr_err(fmt, args...) fprintf(stderr, "%s: "fmt, Name, ##args)
 #endif
