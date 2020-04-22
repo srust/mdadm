@@ -5297,7 +5297,8 @@ ddf_replace_disk(struct active_array *a, mdu_disk_info_t *dsk,
 		if (mdi->disk.raid_disk == dsk->raid_disk &&
 		    (mdi->disk.major != dsk->major ||
 		     mdi->disk.minor != dsk->minor) &&
-		    !(mdi->curr_state & DS_FAULTY))
+		     (mdi->curr_state & DS_INSYNC) &&
+		    !((mdi->curr_state & DS_FAULTY) || mdi->faulty))
 			break;
 	}
 

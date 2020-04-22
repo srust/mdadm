@@ -901,8 +901,13 @@ out3:
 				mdi->disk.major,
 				mdi->disk.minor);
 
-			/* check for replacement complete */
+			/* replace disk if able, otherwise fail replacement */
 			a->container->ss->replace_disk(a, &mdi->disk, &updates);
+
+			/* replace attempt complete */
+			mdi->replace = 0;
+
+			/* queue updates if replacement occurred */
 			if (updates) {
 				/* queue any wait for metadata update */
 				queue_metadata_update(updates);
@@ -911,6 +916,8 @@ out3:
 
 				/* now remove the faulty */
 				mdi->remove = 1;
+			} else {
+				wakeup_monitor();
 			}
 		}
 	}

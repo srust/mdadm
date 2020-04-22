@@ -725,6 +725,23 @@ static int read_and_act(struct active_array *a, fd_set *fds)
 				check_degraded = 1;
 		}
 
+		/* XXX processing stranded spares
+		 *
+		 * In some cases, a spare recovery can be aborted by the
+		 * kernel: for example attempt to set faulty on the last
+		 * remaining online disk during recovery.
+		 *
+		 * The spare is stranded. No recovery occurs automatically, and
+		 * the spare is left in the array. An external utility needs to
+		 * fail the spare in order to cause it to be evicted. Perhaps
+		 * we can do better by evicting it here, as no recovery is in
+		 * progress and the spare is part of the member array but idle.
+		 *
+		 * NOTE: this condition exists with and without disk
+		 * replacement.
+		 */
+		/* process_spares() */
+
 		if (mdi->curr_state & DS_WANT_REPLACEMENT) {
 			check_replacement = 1;
 		}
@@ -817,6 +834,8 @@ static int read_and_act(struct active_array *a, fd_set *fds)
 		write_attr(sync_actions[a->next_action], a->action_fd);
 		dprintf_cont(" action:%s", sync_actions[a->next_action]);
 	}
+
+	/* unblock and remove disks from member array if needed */
 	for (mdi = a->info.devs; mdi ; mdi = mdi->next) {
 		if (mdi->next_state & DS_UNBLOCK) {
 			dprintf_cont(" %d:-blocked", mdi->disk.raid_disk);
