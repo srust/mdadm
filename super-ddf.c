@@ -4936,8 +4936,6 @@ static int bvd_op_device_online(const struct ddf_super *ddf, int pd)
 		
 	for (d = ddf->dlist; d; d = d->next) {
 		if (d->pdnum == pd) {
-			dprintf("pdnum:%d found refnum:%08x)\n",
-				pd, be32_to_cpu(d->disk.refnum));
 			return d->op_ok;
 		}
 	}
@@ -4963,23 +4961,25 @@ static int get_bvd_state(const struct ddf_super *ddf,
 		if (be32_to_cpu(vc->phys_refnum[i]) == 0xffffffff)
 			continue;
 		i_prim = i % n_prim;
-		dprintf("raiddisk:%d index:%d\n", i_prim, i);
-		if (!find_index_in_bvd(ddf, vc, i_prim, &n_bvd))
+		if (!find_index_in_bvd(ddf, vc, i_prim, &n_bvd)) {
+			dprintf("raiddisk:%d index:%d %s physical index not found\n", i_prim, i, op_type);
 			continue;
+		}
 		pd = find_phys(ddf, vc->phys_refnum[i]);
-		dprintf("raiddisk:%d index:%d n_bvd:%u phys_refnum:(%x) pd:%d\n",
-			i_prim, i, n_bvd,
-			be32_to_cpu(vc->phys_refnum[i]), pd);
-		if (pd < 0)
-			continue;
-
 		if (op_sts) {
+			if (pd < 0) {
+				dprintf("raiddisk:%d index:%d pd:%d refnum:%x %s refnum not found\n", i_prim, i, pd,
+					be32_to_cpu(vc->phys_refnum[i]), op_type);
+				continue;
+			}
 			if (!bvd_op_device_online(ddf, pd)) {
-				dprintf("raiddisk:%d index:%d pd:%d %s OFFLINE\n", i_prim, i, pd, op_type);
+				dprintf("raiddisk:%d index:%d pd:%d refnum:%x %s offline\n", i_prim, i, pd,
+					be32_to_cpu(vc->phys_refnum[i]), op_type);
 				continue;
 			}
 			else {
-				dprintf("raiddisk:%d index:%d pd:%d %s online\n", i_prim, i, pd, op_type);
+				dprintf("raiddisk:%d index:%d pd:%d refnum:%x %s online\n", i_prim, i, pd,
+					be32_to_cpu(vc->phys_refnum[i]), op_type);
 			}
 		}
 
