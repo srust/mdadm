@@ -1030,9 +1030,9 @@ int Wait(char *dev)
 			sysfs_init(&mdi, -1, devnm);
 			if (sysfs_get_str(&mdi, NULL, "sync_action",
 					  buf, 20) > 0 &&
-			    strcmp(buf,"idle\n") != 0) {
+			    strcmp(buf,"idle") != 0) {
 				e->percent = RESYNC_UNKNOWN;
-				if (strcmp(buf, "frozen\n") == 0) {
+				if (strcmp(buf, "frozen") == 0) {
 					if (frozen_remaining == 0)
 						e->percent = RESYNC_NONE;
 					else

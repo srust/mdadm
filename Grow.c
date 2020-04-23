@@ -629,7 +629,7 @@ static void unfreeze(struct supertype *st)
 
 		if (sra &&
 		    sysfs_get_str(sra, NULL, "sync_action", buf, 20) > 0
-		    && strcmp(buf, "frozen\n") == 0)
+		    && strcmp(buf, "frozen") == 0)
 			sysfs_set_str(sra, NULL, "sync_action", "idle");
 		sysfs_free(sra);
 	}

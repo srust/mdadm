@@ -857,6 +857,42 @@ good:
 	return 0;
 }
 
+static const char *
+ddf_device_state_str(unsigned state)
+{
+	const char *str = NULL;
+
+	switch (state & DDF_state_mask) {
+	case 0:
+		str = "offline";
+		break;
+	case DDF_Online:
+		str = "online";
+		break;
+	case DDF_Failed:
+		str = "failed";
+		break;
+	case DDF_Rebuilding:
+		str = "rebuilding";
+		break;
+	case DDF_Missing:
+		str = "missing";
+		break;
+	default:
+		if (state & DDF_Failed)
+			str = "failed";
+		else if (state & DDF_Missing)
+			str = "missing";
+		else if ((state & (DDF_Online|DDF_Rebuilding)) == (DDF_Online|DDF_Rebuilding))
+			str = "online,rebuilding";
+		else
+			str = "unknown";
+		break;
+	}
+
+	return str;
+}
+
 static int load_ddf_header(int fd, unsigned long long lba,
 			   unsigned long long size,
 			   int type,
@@ -4222,7 +4258,8 @@ bad:
 	return DDF_NOTFOUND;
 }
 
-static struct mdinfo *container_content_ddf(struct supertype *st, char *subarray)
+static struct mdinfo *
+container_content_ddf(struct supertype *st, char *subarray)
 {
 	/* Given a container loaded by load_super_ddf_all,
 	 * extract information about all the arrays into
@@ -4292,36 +4329,57 @@ static struct mdinfo *container_content_ddf(struct supertype *st, char *subarray
 		sprintf(this->text_version, "/%s/%d",
 			st->container_devnm, this->container_member);
 
+		dprintf("find devices for: %s: %s\n",
+			this->name, this->text_version);
+
 		for (pd = 0; pd < be16_to_cpu(ddf->phys->max_pdes); pd++) {
 			struct mdinfo *dev;
 			struct dl *d;
 			const struct vd_config *bvd;
 			unsigned int iphys;
+			be32 refnum;
 			int stt;
 
-			if (be32_to_cpu(ddf->phys->entries[pd].refnum)
-			    == 0xFFFFFFFF)
+			refnum = ddf->phys->entries[pd].refnum;
+			if (be32_to_cpu(refnum) == 0xFFFFFFFF)
 				continue;
 
 			stt = be16_to_cpu(ddf->phys->entries[pd].state);
-			if ((stt & (DDF_Online|DDF_Failed|DDF_Missing|DDF_Rebuilding)) != DDF_Online)
+			if ((stt & (DDF_Online|DDF_Failed|DDF_Missing|DDF_Rebuilding)) != DDF_Online) {
+				dprintf("-> skipping pdnum:%d refnum:%x state:%s:%u not online\n",
+					pd,
+					be32_to_cpu(refnum),
+					ddf_device_state_str(stt),
+					stt);
 				continue;
+			}
 
 			i = get_pd_index_from_refnum(
-				vc, ddf->phys->entries[pd].refnum,
+				vc, refnum,
 				ddf->mppe, &bvd, &iphys);
-			if (i == DDF_NOTFOUND)
+			if (i == DDF_NOTFOUND) {
+				dprintf("-> skipping pdnum:%d refnum:%x state:%s:%u phys disk index not found\n",
+					pd,
+					be32_to_cpu(refnum),
+					ddf_device_state_str(stt),
+					stt);
 				continue;
+			}
 
 			this->array.working_disks++;
 
 			for (d = ddf->dlist; d ; d=d->next)
-				if (be32_eq(d->disk.refnum,
-					    ddf->phys->entries[pd].refnum))
+				if (be32_eq(d->disk.refnum, refnum))
 					break;
-			if (d == NULL)
+			if (d == NULL) {
 				/* Haven't found that one yet, maybe there are others */
+				dprintf("-> skipping pdnum:%d refnum:%x state:%s:%u disk refnum not found in dlist\n",
+					pd,
+					be32_to_cpu(refnum),
+					ddf_device_state_str(stt),
+					stt);
 				continue;
+			}
 
 			dev = xcalloc(1, sizeof(*dev));
 			dev->next	 = this->devs;
@@ -4340,6 +4398,13 @@ static struct mdinfo *container_content_ddf(struct supertype *st, char *subarray
 			dev->component_size = be64_to_cpu(bvd->blocks);
 			if (d->devname)
 				strcpy(dev->name, d->devname);
+
+			dprintf("-> found pdnum:%d refnum:%x raiddisk:%d (%d:%d)\n",
+				pd,
+				be32_to_cpu(refnum),
+				i,
+				d->major,
+				d->minor);
 		}
 	}
 	return rest;
@@ -5131,35 +5196,6 @@ static int ddf_probe_device_fd(struct supertype *st, int fd)
 
 error:
 	return 0;
-}
-
-static const char *
-ddf_device_state_str(unsigned state)
-{
-	const char *str = NULL;
-
-	switch (state & DDF_state_mask) {
-	case 0:
-		str = "offline";
-		break;
-	case DDF_Online:
-		str = "online";
-		break;
-	case DDF_Failed:
-		str = "failed";
-		break;
-	case DDF_Rebuilding:
-		str = "rebuilding";
-		break;
-	case DDF_Missing:
-		str = "missing";
-		break;
-	default:
-		str = "unknown";
-		break;
-	}
-
-	return str;
 }
 
 static int ddf_probe_device(struct supertype *st, struct dl *d)

@@ -583,6 +583,8 @@ int sysfs_fd_get_str(int fd, char *val, int size)
 	if (n <= 0 || n == size)
 		return -1;
 	val[n] = 0;
+	if (n && val[n-1] == '\n')
+		val[n-1] = 0;
 	return n;
 }
 
@@ -611,8 +613,7 @@ int sysfs_set_safemode(struct mdinfo *sra, unsigned long ms)
 	sec = ms / 1000;
 	msec = ms % 1000;
 
-	sprintf(delay, "%ld.%03ld\n", sec, msec);
-	/*             this '\n' ^ needed for kernels older than 2.6.28 */
+	sprintf(delay, "%ld.%03ld", sec, msec);
 	return sysfs_set_str(sra, NULL, "safe_mode_delay", delay);
 }
 
@@ -924,10 +925,10 @@ int sysfs_freeze_array(struct mdinfo *sra)
 		return 1; /* no sync_action == frozen */
 	if (sysfs_get_str(sra, NULL, "sync_action", buf, 20) <= 0)
 		return 0;
-	if (strcmp(buf, "frozen\n") == 0)
+	if (strcmp(buf, "frozen") == 0)
 		/* Already frozen */
 		return 0;
-	if (strcmp(buf, "idle\n") != 0 && strcmp(buf, "recover\n") != 0)
+	if (strcmp(buf, "idle") != 0 && strcmp(buf, "recover") != 0)
 		return -1;
 	if (sysfs_set_str(sra, NULL, "sync_action", "frozen") < 0)
 		return 0;

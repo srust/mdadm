@@ -499,7 +499,7 @@ static int select_devices(struct mddev_dev *devlist,
 	if ((auto_assem ||
 	     (ident->uuid_set &&
 	      memcmp(uuid_zero, ident->uuid,sizeof(uuid_zero)) == 0)) &&
-	    (!st || !st->sb))
+	    (!st || !st->sb)) {
 		for (tmpdev = devlist; tmpdev; tmpdev = tmpdev->next) {
 			if (tmpdev->used != 3)
 				continue;
@@ -516,12 +516,14 @@ static int select_devices(struct mddev_dev *devlist,
 					close(dfd);
 			}
 		}
+	}
 
 	/* Now reject spares that don't match domains of identified members */
 	for (tmpdev = devlist; tmpdev; tmpdev = tmpdev->next) {
 		struct stat stb;
-		if (tmpdev->used != 3)
+		if (tmpdev->used != 3) {
 			continue;
+		}
 		if (stat(tmpdev->devname, &stb)< 0) {
 			pr_err("fstat failed for %s: %s\n",
 			       tmpdev->devname, strerror(errno));
@@ -1355,6 +1357,7 @@ try_again:
 		st->ignore_hw_compat = 1;
 	num_devs = select_devices(devlist, ident, &st, &content, c,
 				  inargv, auto_assem);
+	dprintf("select devices found %d devices\n", num_devs);
 	if (num_devs < 0)
 		return 1;
 
@@ -1380,6 +1383,8 @@ try_again:
 	else
 		mp = map_by_uuid(&map, content->uuid);
 	if (mp) {
+		dprintf("assembling array already exists: %s\n",
+			mp->path);
 		struct mdinfo *dv;
 		/* array already exists. */
 		pre_exist = sysfs_read(-1, mp->devnm, GET_LEVEL|GET_DEVS);
@@ -1992,8 +1997,12 @@ int assemble_container_content(struct supertype *st, int mdfd,
 				break;
 		}
 
-		if (dev)
+		if (dev) {
+			dprintf("-> assemble keeping %d:%d\n",
+				dev->disk.major,
+				dev->disk.minor);
 			continue;
+		}
 
 		/* Don't want this one any more */
 		if (sysfs_set_str(sra, dev2, "slot", "none") < 0 &&

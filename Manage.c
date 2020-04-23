@@ -344,7 +344,7 @@ int Manage_stop(char *devname, int fd, int verbose, int will_retry)
 	    sysfs_attribute_available(mdi, NULL, "sync_action") &&
 	    sysfs_attribute_available(mdi, NULL, "reshape_direction") &&
 	    sysfs_get_str(mdi, NULL, "sync_action", buf, 20) > 0 &&
-	    strcmp(buf, "reshape\n") == 0 &&
+	    strcmp(buf, "reshape") == 0 &&
 	    sysfs_get_two(mdi, NULL, "raid_disks", &rd1, &rd2) == 2) {
 		unsigned long long position, curr;
 		unsigned long long chunk1, chunk2;

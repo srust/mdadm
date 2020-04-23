@@ -369,7 +369,7 @@ int block_monitor(char *container, const int freeze)
 		    (freeze &&
 		     sysfs_attribute_available(sra, NULL, "sync_action") &&
 		     sysfs_get_str(sra, NULL, "sync_action", buf, 20) > 0 &&
-		     strcmp(buf, "frozen\n") == 0))
+		     strcmp(buf, "frozen") == 0))
 			/* pass */;
 		else {
 			unblock_subarray(sra, 0);
