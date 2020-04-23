@@ -324,6 +324,11 @@ struct mdinfo {
 	#define DS_WANT_REPLACEMENT (1 << 13)
 	#define DS_REPLACEMENT      (1 << 14)
 	int prev_state, curr_state, next_state;
+
+	/* store state booleans that we need to persist;
+	 * as the curr_state is updated and reset regularly.
+	 * As curr_state is the kernel state, the kernel may have
+	 * moved on, but we need to remember. */
 	int faulty;
 	int replace;
 	int remove;
@@ -1052,9 +1057,9 @@ extern struct superswitch {
 			       struct metadata_update *update);
 
 	/* activate_spare will check if the array is degraded and, if it is,
-	 * try to find some spare space in the container.  On success, it add
-	 * appropriate updates (For process_update) to to the 'updates' list
-	 * and returns a list of 'mdinfo' identifying the device, or devices as
+	 * try to find some spare space in the container.  On success, it adds
+	 * appropriate updates (for process_update) to to the 'updates' list
+	 * and returns a list of 'mdinfo' identifying the device (or devices) as
 	 * there might be multiple missing devices and multiple spares
 	 * available.
 	 *

@@ -868,9 +868,9 @@ out3:
 	 *
 	 * Check whether we can replace a disk that "wants" replacement with
 	 * a fully synchronized replacement spare that was previously
-	 * activated. Perform a disk replacemenet, which updates the metadata,
+	 * activated. Perform a disk replacement, which updates the metadata,
 	 * replacing the "faulty, want_replacement" disk with the synchronized
-	 * "spare" in the same raid disk slot.
+	 * "spare,replacement" in the same raid disk slot.
 	 *
 	 * We don't check the array while any update is pending, as it might
 	 * contain a change (such as a spare assignment) which could affect our
@@ -891,7 +891,7 @@ out3:
 				continue;
 			}
 
-			/* disk marked for replacement in state or flag */
+			/* disk marked for replacement */
 			if (!mdi->replace) {
 			      	continue;
 			}

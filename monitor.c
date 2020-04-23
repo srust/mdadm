@@ -157,12 +157,12 @@ int read_dev_state(int fd)
 			rv |= DS_SPARE;
 		if (sysfs_attr_match(cp, "blocked"))
 			rv |= DS_BLOCKED;
+		if (sysfs_attr_match(cp, "write_error"))
+			rv |= DS_WRITE_ERROR;
 		if (sysfs_attr_match(cp, "want_replacement"))
 			rv |= DS_WANT_REPLACEMENT;
 		if (sysfs_attr_match(cp, "replacement"))
 			rv |= DS_REPLACEMENT;
-		if (sysfs_attr_match(cp, "write_error"))
-			rv |= DS_WRITE_ERROR;
 		cp = strchr(cp, ',');
 		if (cp)
 			cp++;
@@ -357,14 +357,16 @@ static void signal_manager(void)
  * resync and is no longer a spare. it is still marked spare during the
  * recovery.
  *
- * return 1 (TRUE) if all disks besides mdi are DS_INSYNC
- *
- * return 0 (FALSE) if any other disk besides mdi is not DS_INSYNC
+ * return 1 (TRUE)  if a replacement is available
+ * return 0 (FALSE) if no replacement is available
  */
 static int
 replacement_available(struct active_array *a, struct mdinfo *mdi)
 {
 	struct mdinfo *d;
+
+	if (!mdi->replace)
+		return 0;
 
 	for (d = a->info.devs; d; d = d->next) {
 		if (d == mdi)
@@ -386,8 +388,10 @@ replacement_available(struct active_array *a, struct mdinfo *mdi)
  *     Don't mark faulty: if replace and replacement available
  *
  *     We must not mark faulty yet, if the disk is being replaced and
- *     a replacement is available. This is if we are in the middle of recovery,
- *     or if recovery has completed.
+ *     a replacement is available: A disk that "wants_replacement" going to
+ *     faulty is our transition point. We can now perform the replacement once
+ *     the "replacement" goes to insync, and the "wants_replacement" goes to
+ *     faulty.
  *
  *     NOTE: replacement available means the replacement disk is INSYNC and
  *     marked as REPLACEMENT. This means the recovery has actually completed to
@@ -401,9 +405,10 @@ replacement_available(struct active_array *a, struct mdinfo *mdi)
  *
  * For non-disk-replacement mode, always mark faulty immediately.
  *
- * returns 1 if disk updated
+ * returns 1 if disk updated and marked faulty
  * returns 0 if update not required
  */
+
 static int
 process_faulty(struct active_array *a, struct mdinfo *mdi)
 {

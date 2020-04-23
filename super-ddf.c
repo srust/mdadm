@@ -5825,9 +5825,6 @@ static void ddf_remove_failed(struct ddf_super *ddf)
 
 	/*
 	 * remove "disk being removed" from dlist.
-	 *
-	 * This will cause metadata update to remove the physical disk from
-	 * metadata
 	 */
 	struct dl **dlp;
 	for (dlp = &ddf->dlist; *dlp; dlp = &(*dlp)->next) {
