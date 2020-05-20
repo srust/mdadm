@@ -7735,7 +7735,7 @@ static unsigned long long imsm_set_array_size(struct imsm_dev *dev,
 	return array_blocks;
 }
 
-static void imsm_set_disk(struct active_array *a, int n, int state);
+static int imsm_set_disk(struct active_array *a, mdu_disk_info_t *dsk, int state);
 
 static void imsm_progress_container_reshape(struct intel_super *super)
 {
@@ -7856,7 +7856,7 @@ static int imsm_set_array_state(struct active_array *a, int consistent)
 				/* finalize online capacity expansion/reshape */
 				for (mdi = a->info.devs; mdi; mdi = mdi->next)
 					imsm_set_disk(a,
-						      mdi->disk.raid_disk,
+						      &mdi->disk,
 						      mdi->curr_state);
 
 				imsm_progress_container_reshape(super);
@@ -7957,7 +7957,7 @@ static int imsm_disk_slot_to_ord(struct active_array *a, int slot)
 	return get_imsm_ord_tbl_ent(dev, slot, MAP_0);
 }
 
-static void imsm_set_disk(struct active_array *a, int n, int state)
+static int imsm_set_disk(struct active_array *a, mdu_disk_info_t *dsk, int state)
 {
 	int inst = a->info.container_member;
 	struct intel_super *super = a->container->sb;
@@ -7968,11 +7968,12 @@ static void imsm_set_disk(struct active_array *a, int n, int state)
 	int recovery_not_finished = 0;
 	int failed;
 	int ord;
+	int n = dsk->raid_disk;
 	__u8 map_state;
 
 	ord = imsm_disk_slot_to_ord(a, n);
 	if (ord < 0)
-		return;
+		return -1;
 
 	dprintf("imsm: set_disk %d:%x\n", n, state);
 	disk = get_imsm_disk(super, ord_to_idx(ord));
@@ -8091,6 +8092,8 @@ static void imsm_set_disk(struct active_array *a, int n, int state)
 		dprintf_cont("state %i\n", map_state);
 	}
 	dprintf_cont("\n");
+
+	return 1;
 }
 
 static int store_imsm_mpb(int fd, struct imsm_super *mpb)
@@ -8311,6 +8314,7 @@ static int imsm_rebuild_allowed(struct supertype *cont, int dev_idx, int failed)
 }
 
 static struct mdinfo *imsm_activate_spare(struct active_array *a,
+					  int replace_only,
 					  struct metadata_update **updates)
 {
 	/**

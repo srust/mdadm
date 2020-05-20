@@ -235,7 +235,7 @@ struct dlm_lksb {
 
 #define ARRAY_SIZE(x) (sizeof(x)/sizeof(x[0]))
 
-extern char Name[];
+extern __thread const char *Name;
 
 struct md_bb_entry {
 	unsigned long long sector;
@@ -313,15 +313,25 @@ struct mdinfo {
 	int state_fd;
 	int bb_fd;
 	int ubb_fd;
-	#define DS_FAULTY	1
-	#define	DS_INSYNC	2
-	#define	DS_WRITE_MOSTLY	4
-	#define	DS_SPARE	8
-	#define DS_BLOCKED	16
-	#define	DS_REMOVE	1024
-	#define	DS_UNBLOCK	2048
-    #define DS_WRITE_ERROR 4096
+	#define DS_FAULTY	    (1 << 0)
+	#define	DS_INSYNC	    (1 << 1)
+	#define	DS_WRITE_MOSTLY	    (1 << 2)
+	#define	DS_SPARE	    (1 << 3)
+	#define DS_BLOCKED	    (1 << 4)
+	#define	DS_REMOVE	    (1 << 10)
+	#define	DS_UNBLOCK	    (1 << 11)
+	#define DS_WRITE_ERROR      (1 << 12)
+	#define DS_WANT_REPLACEMENT (1 << 13)
+	#define DS_REPLACEMENT      (1 << 14)
 	int prev_state, curr_state, next_state;
+
+	/* store state booleans that we need to persist;
+	 * as the curr_state is updated and reset regularly.
+	 * As curr_state is the kernel state, the kernel may have
+	 * moved on, but we need to remember. */
+	int faulty;
+	int replace;
+	int remove;
 
 	/* info read from sysfs */
 	char		sysfs_array_state[20];
@@ -1027,7 +1037,16 @@ extern struct superswitch {
 	 * set_disk might be called when the state of the particular disk has
 	 * not in fact changed.
 	 */
-	void (*set_disk)(struct active_array *a, int n, int state);
+	int (*set_disk)(struct active_array *a, mdu_disk_info_t *dsk, int state);
+
+	/* Complete the disk replacement. Once a replaced disk goes faulty,
+	 * replace it with the selected replacement in it's slot. This updates
+	 * the metadata to "move" the replacement disk down and replaces the
+	 * faulty disk.
+	 */
+	void (*replace_disk)(struct active_array *a, mdu_disk_info_t *dsk,
+			     struct metadata_update **updates);
+
 	int (*sync_metadata)(struct supertype *st);
 	void (*process_update)(struct supertype *st,
 			       struct metadata_update *update);
@@ -1037,14 +1056,19 @@ extern struct superswitch {
 	int (*prepare_update)(struct supertype *st,
 			       struct metadata_update *update);
 
-	/* activate_spare will check if the array is degraded and, if it
-	 * is, try to find some spare space in the container.
-	 * On success, it add appropriate updates (For process_update) to
-	 * to the 'updates' list and returns a list of 'mdinfo' identifying
-	 * the device, or devices as there might be multiple missing
-	 * devices and multiple spares available.
+	/* activate_spare will check if the array is degraded and, if it is,
+	 * try to find some spare space in the container.  On success, it adds
+	 * appropriate updates (for process_update) to to the 'updates' list
+	 * and returns a list of 'mdinfo' identifying the device (or devices) as
+	 * there might be multiple missing devices and multiple spares
+	 * available.
+	 *
+	 * Optionally, select a disk for replacement by providing the
+	 * 'replace_only' boolean set to 1.  This ensures a single disk
+	 * replacement disk only is activated.
 	 */
 	struct mdinfo *(*activate_spare)(struct active_array *a,
+					 int replace_only,
 					 struct metadata_update **updates);
 	/*
 	 * Return statically allocated string that represents metadata specific
@@ -1153,6 +1177,7 @@ struct supertype {
 			 */
 	int devcnt;
 	int retry_soon;
+	int retry_later;
 	int nodes;
 	char *cluster_name;
 

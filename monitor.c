@@ -23,6 +23,7 @@
 #include <sys/syscall.h>
 #include <sys/select.h>
 #include <signal.h>
+#include <pthread.h>
 
 static char *array_states[] = {
 	"clear", "inactive", "suspended", "readonly", "read-auto",
@@ -156,8 +157,12 @@ int read_dev_state(int fd)
 			rv |= DS_SPARE;
 		if (sysfs_attr_match(cp, "blocked"))
 			rv |= DS_BLOCKED;
-        if (sysfs_attr_match(cp, "write_error"))
-            rv |= DS_WRITE_ERROR;
+		if (sysfs_attr_match(cp, "write_error"))
+			rv |= DS_WRITE_ERROR;
+		if (sysfs_attr_match(cp, "want_replacement"))
+			rv |= DS_WANT_REPLACEMENT;
+		if (sysfs_attr_match(cp, "replacement"))
+			rv |= DS_REPLACEMENT;
 		cp = strchr(cp, ',');
 		if (cp)
 			cp++;
@@ -346,6 +351,109 @@ static void signal_manager(void)
 	syscall(SYS_tgkill, pid, mgr_tid, SIGUSR1);
 }
 
+/*
+ * Ensure a drive other than the one in question is marked as insync and
+ * replacement. insync means the replacement drive has completed its recovery
+ * resync and is no longer a spare. it is still marked spare during the
+ * recovery.
+ *
+ * return 1 (TRUE)  if a replacement is available
+ * return 0 (FALSE) if no replacement is available
+ */
+static int
+replacement_available(struct active_array *a, struct mdinfo *mdi)
+{
+	struct mdinfo *d;
+
+	if (!mdi->replace)
+		return 0;
+
+	for (d = a->info.devs; d; d = d->next) {
+		if (d == mdi)
+			continue;
+		if ((d->curr_state & DS_INSYNC) &&
+		    (d->curr_state & DS_REPLACEMENT))
+			return 1;
+	}
+
+	return 0;
+}
+
+/* faulty processing
+ *
+ * This is different on whether we are doing disk replacment or not.
+ *
+ * For disk replacement:
+ *
+ *     Don't mark faulty: if replace and replacement available
+ *
+ *     We must not mark faulty yet, if the disk is being replaced and
+ *     a replacement is available: A disk that "wants_replacement" going to
+ *     faulty is our transition point. We can now perform the replacement once
+ *     the "replacement" goes to insync, and the "wants_replacement" goes to
+ *     faulty.
+ *
+ *     NOTE: replacement available means the replacement disk is INSYNC and
+ *     marked as REPLACEMENT. This means the recovery has actually completed to
+ *     the replacement disk, even if the recovery state has not updated yet. We
+ *     must transition through a disk replacement, which is handled through the
+ *     manager.
+ *
+ *     However, if we are recovering, but no replacement is available, we must
+ *     mark this faulty disk as faulty immediately, so that we do not make
+ *     further progress and device probing has the correct information.
+ *
+ * For non-disk-replacement mode, always mark faulty immediately.
+ *
+ * returns 1 if disk updated and marked faulty
+ * returns 0 if update not required
+ */
+
+static int
+process_faulty(struct active_array *a, struct mdinfo *mdi)
+{
+	int update;
+
+	/* disk replacement faulty but replacement available: transition */
+	if (mdi->replace && replacement_available(a, mdi)) {
+		dprintf("replacement disk available skip faulty: %d (%d:%d)\n",
+			mdi->disk.raid_disk,
+			mdi->disk.major,
+			mdi->disk.minor);
+	    	return 0;
+	}
+	
+        /* mark disk as faulty and queue metadata update */
+	update = a->container->ss->set_disk(a, &mdi->disk, mdi->curr_state);
+	if (update) {
+		dprintf("marking disk FAULTY: %d (%d:%d)\n",
+			mdi->disk.raid_disk,
+			mdi->disk.major,
+			mdi->disk.minor);
+	}
+	a->container->ss->update_state(a->container);
+
+	/* unblock faulty if blocked */
+	if (mdi->curr_state & DS_BLOCKED) {
+		dprintf("FAULTY disk is DS_BLOCKED: %d (%d:%d)\n",
+			mdi->disk.raid_disk,
+			mdi->disk.major,
+			mdi->disk.minor);
+		mdi->next_state |= DS_UNBLOCK;
+	}
+
+	if (a->curr_state == read_auto) {
+		a->container->ss->set_array_state(a, 0);
+		a->next_state = active;
+	}
+
+	/* remove immediately if not replacing */
+	if (!mdi->replace && a->curr_state > readonly)
+		mdi->next_state |= DS_REMOVE;
+
+	return update;
+}
+
 /* Monitor a set of active md arrays - all of which share the
  * same metadata - and respond to events that require
  * metadata update.
@@ -410,6 +518,8 @@ static int read_and_act(struct active_array *a, fd_set *fds)
 	unsigned long long sync_completed;
 	int check_degraded = 0;
 	int check_reshape = 0;
+	int check_replacement = 0;
+	int check_remove = 0;
 	int deactivate = 0;
 	struct mdinfo *mdi;
 	int ret = 0;
@@ -430,6 +540,17 @@ static int read_and_act(struct active_array *a, fd_set *fds)
 	if (a->curr_state != clear)
 		read_resync_start(a->resync_start_fd, &a->info.resync_start);
 
+	gettimeofday(&tv, NULL);
+	dprintf("array%d: %ld.%06ld state:%s prev_state:%s action:%s prev_action:%s resync_start:%llu\n",
+		a->info.container_member,
+		tv.tv_sec, tv.tv_usec,
+		array_states[a->curr_state],
+		array_states[a->prev_state],
+		sync_actions[a->curr_action],
+		sync_actions[a->prev_action],
+		a->info.resync_start
+		);
+
 	sync_completed = read_sync_completed(a->sync_completed_fd);
 	for (mdi = a->info.devs; mdi ; mdi = mdi->next) {
 		mdi->next_state = 0;
@@ -440,14 +561,51 @@ static int read_and_act(struct active_array *a, fd_set *fds)
 			mdi->curr_state = read_dev_state(mdi->state_fd);
 		}
 
-		if (mdi->curr_state & DS_WRITE_ERROR) {
-			dprintf("curr_state: WRITE_ERROR: disk %d\n",
-				mdi->disk.raid_disk);
+		dprintf("array%d: disk%d (%d:%d) state: %d: ",
+			a->info.container_member,
+			mdi->disk.raid_disk,
+			mdi->disk.major,
+			mdi->disk.minor,
+			mdi->curr_state);
+
+		if (mdi->curr_state & (DS_WRITE_ERROR |
+				       DS_FAULTY |
+				       DS_WANT_REPLACEMENT |
+				       DS_REPLACEMENT |
+				       DS_BLOCKED |
+				       DS_SPARE)) {
+
+			if (mdi->curr_state & DS_WRITE_ERROR) {
+				fprintf(stderr, "WRITE_ERROR ");
+			}
+			if (mdi->curr_state & DS_FAULTY) {
+				fprintf(stderr, "FAULTY ");
+				mdi->faulty = 1;
+
+				/* unset REPLACEMENT if FAULTY */
+				mdi->curr_state &= ~DS_WANT_REPLACEMENT;
+				mdi->curr_state &= ~DS_REPLACEMENT;
+			}
+			if (mdi->curr_state & DS_BLOCKED) {
+				fprintf(stderr, "BLOCKED ");
+			}
+			if (mdi->curr_state & DS_SPARE) {
+				fprintf(stderr, "SPARE ");
+			}
+			if (mdi->curr_state & DS_WANT_REPLACEMENT) {
+				fprintf(stderr, "WANT_REPLACEMENT ");
+				mdi->replace = 1;
+			}
+			if (mdi->curr_state & DS_REPLACEMENT) {
+				fprintf(stderr, "REPLACEMENT ");
+			}
 		}
-		if (mdi->curr_state & DS_FAULTY) {
-			dprintf("curr_state: FAULTY: disk %d\n",
-				mdi->disk.raid_disk);
-		}
+
+		fprintf(stderr, "%s%s%s\n",
+			(mdi->curr_state & DS_INSYNC) ? "online" : "",
+			mdi->remove ? ", removed" :
+		            mdi->replace ? ", want_replacement" : "",
+		        mdi->faulty  ? ", faulty" : "");
 
 		/*
 		 * If array is blocked and metadata handler is able to handle
@@ -462,17 +620,6 @@ static int read_and_act(struct active_array *a, fd_set *fds)
 		if (FD_ISSET(mdi->bb_fd, fds))
 			check_for_cleared_bb(a, mdi);
 	}
-
-	gettimeofday(&tv, NULL);
-	dprintf("array%d: %ld.%06ld state:%s prev_state:%s action:%s prev_action:%s resync_start:%llu\n",
-		a->info.container_member,
-		tv.tv_sec, tv.tv_usec,
-		array_states[a->curr_state],
-		array_states[a->prev_state],
-		sync_actions[a->curr_action],
-		sync_actions[a->prev_action],
-		a->info.resync_start
-		);
 
 	if ((a->curr_state == bad_word || a->curr_state <= inactive) &&
 	    a->prev_state > inactive) {
@@ -533,13 +680,14 @@ static int read_and_act(struct active_array *a, fd_set *fds)
 	if (!deactivate &&
 	    a->curr_action == idle &&
 	    a->prev_action == recover) {
+		dprintf("recovery finished: marking disks' states\n");
 		/* A recovery has finished.  Some disks may be in sync now,
 		 * and the array may no longer be degraded
 		 */
 		for (mdi = a->info.devs ; mdi ; mdi = mdi->next) {
-			a->container->ss->set_disk(a, mdi->disk.raid_disk,
+			a->container->ss->set_disk(a, &mdi->disk,
 						   mdi->curr_state);
-			if (! (mdi->curr_state & DS_INSYNC))
+			if (!(mdi->curr_state & DS_INSYNC))
 				check_degraded = 1;
 			a->container->ss->update_state(a->container);
 			count++;
@@ -565,27 +713,31 @@ static int read_and_act(struct active_array *a, fd_set *fds)
 	 *    made writable.
 	 */
 	for (mdi = a->info.devs ; mdi ; mdi = mdi->next) {
-		if (mdi->curr_state & DS_BLOCKED) {
-			dprintf("curr_state: DS_BLOCKED: disk %d\n",
-				mdi->disk.raid_disk);
-		}
+		/* faulty processing logic */
 		if (mdi->curr_state & DS_FAULTY) {
-			dprintf("curr_state: FAULTY disk: %d\n", mdi->disk.number);
-			a->container->ss->set_disk(a, mdi->disk.raid_disk,
-						   mdi->curr_state);
-			a->container->ss->update_state(a->container);
-			check_degraded = 1;
-			if (mdi->curr_state & DS_BLOCKED) {
-				dprintf("FAULTY disk is DS_BLOCKED: %d\n",
-					mdi->disk.raid_disk);
-				mdi->next_state |= DS_UNBLOCK;
-			}
-			if (a->curr_state == read_auto) {
-				a->container->ss->set_array_state(a, 0);
-				a->next_state = active;
-			}
-			if (a->curr_state > readonly)
-				mdi->next_state |= DS_REMOVE;
+			if (process_faulty(a, mdi))
+				check_degraded = 1;
+		}
+
+		/* XXX processing stranded spares
+		 *
+		 * In some cases, a spare recovery can be aborted by the
+		 * kernel: for example attempt to set faulty on the last
+		 * remaining online disk during recovery.
+		 *
+		 * The spare is stranded. No recovery occurs automatically, and
+		 * the spare is left in the array. An external utility needs to
+		 * fail the spare in order to cause it to be evicted. Perhaps
+		 * we can do better by evicting it here, as no recovery is in
+		 * progress and the spare is part of the member array but idle.
+		 *
+		 * NOTE: this condition exists with and without disk
+		 * replacement.
+		 */
+		/* process_spares() */
+
+		if (mdi->curr_state & DS_WANT_REPLACEMENT) {
+			check_replacement = 1;
 		}
 	}
 
@@ -662,7 +814,7 @@ static int read_and_act(struct active_array *a, fd_set *fds)
                 }
         }
 
-        dprintf("array%d: state:%s action:%s next(",
+        dprintf("array%d: updating array states state:%s action:%s next(",
 		a->info.container_member,
                 array_states[a->curr_state],
                 sync_actions[a->curr_action]);
@@ -676,13 +828,16 @@ static int read_and_act(struct active_array *a, fd_set *fds)
 		write_attr(sync_actions[a->next_action], a->action_fd);
 		dprintf_cont(" action:%s", sync_actions[a->next_action]);
 	}
+
+	/* unblock and remove disks from member array if needed */
 	for (mdi = a->info.devs; mdi ; mdi = mdi->next) {
 		if (mdi->next_state & DS_UNBLOCK) {
 			dprintf_cont(" %d:-blocked", mdi->disk.raid_disk);
 			write_attr("-blocked", mdi->state_fd);
 		}
 
-		if ((mdi->next_state & DS_REMOVE) && mdi->state_fd >= 0) {
+		if (mdi->remove ||
+		   ((mdi->next_state & DS_REMOVE) && mdi->state_fd >= 0)) {
 			int remove_result;
 
 			/* The kernel may not be able to immediately remove the
@@ -697,8 +852,10 @@ static int read_and_act(struct active_array *a, fd_set *fds)
 				close(mdi->bb_fd);
 				close(mdi->ubb_fd);
 				mdi->state_fd = -1;
-			} else
+				check_remove = 1;
+			} else {
 				ret |= ARRAY_BUSY;
+			}
 		}
 		if (mdi->next_state & DS_INSYNC) {
 			write_attr("+in_sync", mdi->state_fd);
@@ -717,12 +874,19 @@ static int read_and_act(struct active_array *a, fd_set *fds)
 		mdi->next_state = 0;
 	}
 
-	if (check_degraded || check_reshape) {
+	if (check_degraded ||
+	    check_reshape ||
+	    check_replacement ||
+	    check_remove) {
 		/* manager will do the actual check */
 		if (check_degraded)
 			a->check_degraded = 1;
 		if (check_reshape)
 			a->check_reshape = 1;
+		if (check_replacement)
+			a->check_replacement = 1;
+		if (check_remove)
+			a->check_remove = 1;
 		signal_manager();
 	}
 
@@ -762,15 +926,23 @@ static void reconcile_failed(struct active_array *aa, struct mdinfo *failed)
 }
 
 #ifdef DEBUG
-static void dprint_wake_reasons(fd_set *fds)
+static void wake_reasons(struct supertype *container, fd_set *fds)
 {
 	int i;
 	char proc_path[256];
 	char link[256];
 	char *basename;
+	int any = 0;
 	int rv;
 
-	fprintf(stderr, "monitor: wake ( ");
+	dprintf("(");
+	if (container->retry_soon || container->retry_later) {
+		any = 1;
+		if (container->retry_soon)
+			fprintf(stderr, "retry-soon");
+		if (container->retry_later)
+			fprintf(stderr, "retry-later");
+	}
 	for (i = 0; i < FD_SETSIZE; i++) {
 		if (FD_ISSET(i, fds)) {
 			sprintf(proc_path, "/proc/%d/fd/%d",
@@ -783,8 +955,11 @@ static void dprint_wake_reasons(fd_set *fds)
 			}
 			link[rv] = '\0';
 			basename = strrchr(link, '/');
-			fprintf(stderr, "%d:%s ",
+			if (any)
+				fprintf(stderr, " ");
+			fprintf(stderr, "%d:%s",
 				i, basename ? ++basename : link);
+			any = 1;
 		}
 	}
 	fprintf(stderr, ")\n");
@@ -826,6 +1001,8 @@ static int wait_and_act(struct supertype *container, int nowait)
 		add_fd(&rfds, &maxfd, a->action_fd);
 		add_fd(&rfds, &maxfd, a->sync_completed_fd);
 		for (mdi = a->info.devs ; mdi ; mdi = mdi->next) {
+			if (mdi->remove)
+				continue;
 			add_fd(&rfds, &maxfd, mdi->state_fd);
 			add_fd(&rfds, &maxfd, mdi->bb_fd);
 			add_fd(&rfds, &maxfd, mdi->ubb_fd);
@@ -871,8 +1048,12 @@ static int wait_and_act(struct supertype *container, int nowait)
 		ts.tv_nsec = 0;
 		if (*aap == NULL || container->retry_soon) {
 			/* just waiting to get O_EXCL access */
-			ts.tv_sec = 0;
+			ts.tv_sec  = 0;
 			ts.tv_nsec = 20000000ULL;
+		}
+		if (container->retry_later) {
+			ts.tv_sec  = 1;
+			ts.tv_nsec = 0;
 		}
 		sigprocmask(SIG_UNBLOCK, NULL, &set);
 		sigdelset(&set, SIGUSR1);
@@ -889,10 +1070,12 @@ static int wait_and_act(struct supertype *container, int nowait)
 					errno);
 		}
 		#ifdef DEBUG
-		else
-			dprint_wake_reasons(&rfds);
+		else {
+			wake_reasons(container, &rfds);
+		}
 		#endif
-		container->retry_soon = 0;
+		container->retry_soon  = 0;
+		container->retry_later = 0;
 	}
 
 	if (update_queue) {
@@ -924,7 +1107,9 @@ static int wait_and_act(struct supertype *container, int nowait)
 			signal_manager();
 		}
 		if (a->container && !a->to_remove) {
+			pthread_mutex_lock(&array_lock);
 			int ret = read_and_act(a, &rfds);
+			pthread_mutex_unlock(&array_lock);
 			rv |= 1;
 			dirty_arrays += !!(ret & ARRAY_DIRTY);
 			/* when terminating stop manipulating the array after it
@@ -933,8 +1118,12 @@ static int wait_and_act(struct supertype *container, int nowait)
 			 */
 			if (sigterm && !(ret & ARRAY_DIRTY))
 				a->container = NULL; /* stop touching this array */
-			if (ret & ARRAY_BUSY)
-				container->retry_soon = 1;
+			if (ret & ARRAY_BUSY) {
+				if (a->curr_action != idle)
+					container->retry_later = 1;
+				else
+					container->retry_soon = 1;
+			}
 		}
 	}
 
@@ -954,6 +1143,9 @@ void do_monitor(struct supertype *container)
 {
 	int rv;
 	int first = 1;
+
+	Name = "monitor";
+
 	do {
 		rv = wait_and_act(container, first);
 		first = 0;

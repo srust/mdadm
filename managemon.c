@@ -107,6 +107,7 @@
 #include	<sys/syscall.h>
 #include	<sys/socket.h>
 #include	<signal.h>
+#include <pthread.h>
 
 static void close_aa(struct active_array *aa)
 {
@@ -258,6 +259,17 @@ static void queue_metadata_update(struct metadata_update *mu)
 	while (*qp)
 		qp = & ((*qp)->next);
 	*qp = mu;
+}
+
+static void
+wait_metadata_update(struct supertype *container)
+{
+	pthread_mutex_unlock(&array_lock);
+	while (update_queue_pending || update_queue) {
+		check_update_queue(container);
+		usleep(15*1000);
+	}
+	pthread_mutex_lock(&array_lock);
 }
 
 /*
@@ -575,6 +587,8 @@ static void manage_member(struct mdstat_ent *mdstat,
 	int frozen;
 	struct supertype *container = a->container;
 	unsigned long long int component_size = 0;
+	struct timeval tv;
+	struct mdinfo *mdi;
 
 	if (container == NULL)
 		/* Raced with something */
@@ -624,13 +638,36 @@ static void manage_member(struct mdstat_ent *mdstat,
 	if (a->container == NULL)
 		return;
 
+	gettimeofday(&tv, NULL);
+	dprintf("array%d: %ld.%06ld\n",
+		a->info.container_member,
+		tv.tv_sec, tv.tv_usec);
+
+	for (mdi = a->info.devs; mdi; mdi = mdi->next) {
+		dprintf("array%d disk%d (%d:%d) state %d%s%s%s%s%s\n",
+			a->info.container_member,
+			mdi->disk.raid_disk,
+			mdi->disk.major,
+			mdi->disk.minor,
+			mdi->curr_state,
+			(mdi->curr_state & DS_INSYNC) ? ", online" : "",
+			mdi->remove ? ", removed" : "",
+		        mdi->faulty ? ", faulty" : "",
+		        ((mdi->curr_state & DS_WANT_REPLACEMENT) || mdi->replace) ? ", want_replacement" : "",
+		        (mdi->curr_state & DS_REPLACEMENT) ? ", replacement" : "");
+	}
+
 	if (sigterm && a->info.safe_mode_delay != 1) {
 		sysfs_set_safemode(&a->info, 1);
 		a->info.safe_mode_delay = 1;
 	}
 
-	/* We don't check the array while any update is pending, as it
-	 * might container a change (such as a spare assignment) which
+	/* Array Degraded Check
+	 *
+	 * Check whether we can activate a new spare on a degraded array.
+	 *
+	 * We don't check the array while any update is pending, as it
+	 * might contain a change (such as a spare assignment) which
 	 * could affect our decisions.
 	 */
 	if (a->check_degraded && !frozen &&
@@ -645,9 +682,9 @@ static void manage_member(struct mdstat_ent *mdstat,
 		/* The array may not be degraded, this is just a good time
 		 * to check.
 		 */
-		newdev = container->ss->activate_spare(a, &updates);
+		newdev = container->ss->activate_spare(a, 0, &updates);
 		if (!newdev)
-			return;
+			goto out;
 
 		newa = duplicate_aa(a);
 		if (!newa)
@@ -666,6 +703,9 @@ static void manage_member(struct mdstat_ent *mdstat,
 
 			newd = xmalloc(sizeof(*newd));
 
+			dprintf("activating spare: %d:%d\n",
+				d->disk.major, d->disk.minor);
+
 			/* re-add case, raid_disk >= 0.
 			 * Set resume to recover from bitmap
 			 */
@@ -682,13 +722,9 @@ static void manage_member(struct mdstat_ent *mdstat,
 		}
 		queue_metadata_update(updates);
 		updates = NULL;
-		while (update_queue_pending || update_queue) {
-			check_update_queue(container);
-			usleep(15*1000);
-		}
+		wait_metadata_update(container);
 		replace_array(container, a, newa);
-		if (sysfs_set_str(&a->info, NULL, "sync_action", "recover")
-		    == 0)
+		if (sysfs_set_str(&a->info, NULL, "sync_action", "recover") == 0)
 			newa->prev_action = recover;
 		dprintf("recovery started on %s\n", a->info.sys_name);
  out:
@@ -700,13 +736,15 @@ static void manage_member(struct mdstat_ent *mdstat,
 		free_updates(&updates);
 	}
 
+	/* Array Reshape Check
+	 *
+	 * mdadm might have added some devices to the array.
+	 * We want to disk_init_and_add any such device to a
+	 * duplicate_aa and replace a with that.
+	 * mdstat doesn't have enough info so we sysfs_read
+	 * and look for new stuff.
+	 */
 	if (a->check_reshape) {
-		/* mdadm might have added some devices to the array.
-		 * We want to disk_init_and_add any such device to a
-		 * duplicate_aa and replace a with that.
-		 * mdstat doesn't have enough info so we sysfs_read
-		 * and look for new stuff.
-		 */
 		struct mdinfo *info, *d, *d2, *newd;
 		unsigned long long array_size;
 		struct active_array *newa = NULL;
@@ -740,6 +778,154 @@ static void manage_member(struct mdstat_ent *mdstat,
 		}
 	out2:
 		sysfs_free(info);
+		if (newa)
+			replace_array(container, a, newa);
+	}
+
+	/* Array Replacement Start Check
+	 *
+	 * Check whether we can activate a new spare to be a replacement for
+	 * a disk that "wants" replacement.
+	 *
+	 * We don't check the array while any update is pending, as it might
+	 * contain a change (such as a spare assignment) which could affect our
+	 * decisions.
+	 */
+	if (a->check_replacement && !frozen &&
+	    update_queue == NULL && update_queue_pending == NULL) {
+		/*
+		 * check for disks being replaced and activate spares to replace them.
+		 */
+		struct metadata_update *updates = NULL;
+		struct mdinfo *newdev = NULL;
+		struct mdinfo *info, *d, *newd;
+		struct active_array *newa;
+
+		a->check_replacement = 0;
+		info = sysfs_read(-1, mdstat->devnm,
+				  GET_DEVS|GET_OFFSET|GET_SIZE|GET_STATE);
+		if (!info)
+			goto out3;
+
+		/* check disk states for those wanting replacement */
+		for (d = info->devs; d; d = d->next) {
+			dprintf("disk in array: %d:%d sysfs state: %d\n",
+				d->disk.major, d->disk.minor, d->disk.state);
+			if (d->disk.raid_disk < 0)
+				continue;
+			if (!(d->disk.state & (1 << MD_DISK_REPLACEMENT)))
+				continue;
+
+			dprintf("replacement wanted %d:%d\n",
+				d->disk.major, d->disk.minor);
+
+			/* Activate a replacement */
+			newdev = container->ss->activate_spare(a, 1, &updates);
+			if (!newdev)
+				continue;
+
+			newa = duplicate_aa(a);
+			if (!newa)
+				goto out3;
+
+			/* prevent the kernel from activating the disk(s) before we
+			 * finish adding them
+			 */
+			dprintf("freezing %s\n", a->info.sys_name);
+			sysfs_set_str(&a->info, NULL, "sync_action", "frozen");
+
+			/* set replacement disk to replace the raid_disk */
+			newdev->disk.raid_disk = d->disk.raid_disk;
+
+			if (sysfs_add_disk(&newa->info, newdev, 0) < 0) {
+				free(newd);
+				continue;
+			}
+			newd = xmalloc(sizeof(*newd));
+			disk_init_and_add(newd, newdev, newa);
+
+			queue_metadata_update(updates);
+			updates = NULL;
+			wait_metadata_update(container);
+			while (update_queue_pending || update_queue) {
+				check_update_queue(container);
+				usleep(15*1000);
+			}
+			replace_array(container, a, newa);
+			if (sysfs_set_str(&a->info, NULL, "sync_action", "recover") == 0)
+				newa->prev_action = recover;
+
+			dprintf("recovery started on %s\n", a->info.sys_name);
+
+			free(newdev);
+			free_updates(&updates);
+		}
+out3:
+		sysfs_free(info);
+	}
+
+	/* Array Replacement Finish Check
+	 *
+	 * Check whether we can replace a disk that "wants" replacement with
+	 * a fully synchronized replacement spare that was previously
+	 * activated. Perform a disk replacement, which updates the metadata,
+	 * replacing the "faulty, want_replacement" disk with the synchronized
+	 * "spare,replacement" in the same raid disk slot.
+	 *
+	 * We don't check the array while any update is pending, as it might
+	 * contain a change (such as a spare assignment) which could affect our
+	 * decisions.
+	 */
+	if (!frozen && update_queue == NULL && update_queue_pending == NULL) {
+		struct metadata_update *updates = NULL;
+		for (mdi = a->info.devs; mdi; mdi = mdi->next) {
+			updates = NULL;
+
+			// already replaced
+			if (mdi->remove) {
+				continue;
+			}
+
+			// check for replacement on faulty disks
+			if (!mdi->faulty) {
+				continue;
+			}
+
+			/* disk marked for replacement */
+			if (!mdi->replace) {
+			      	continue;
+			}
+
+			dprintf("REPLACE disk: %d (%d:%d)\n",
+				mdi->disk.raid_disk,
+				mdi->disk.major,
+				mdi->disk.minor);
+
+			/* replace disk if able, otherwise fail replacement */
+			a->container->ss->replace_disk(a, &mdi->disk, &updates);
+
+			/* replace attempt complete */
+			mdi->replace = 0;
+
+			/* queue updates if replacement occurred */
+			if (updates) {
+				/* queue any wait for metadata update */
+				queue_metadata_update(updates);
+				updates = NULL;
+				wait_metadata_update(container);
+
+				/* now remove the faulty */
+				mdi->remove = 1;
+			} else {
+				wakeup_monitor();
+			}
+		}
+	}
+
+	if (a->check_remove) {
+		dprintf("checking remove...\n");
+		a->check_remove = 0;
+		struct active_array *newa = duplicate_aa(a);
 		if (newa)
 			replace_array(container, a, newa);
 	}
@@ -911,8 +1097,11 @@ void manage(struct mdstat_ent *mdstat, struct supertype *container)
 		/* Looks like a member of this container */
 		for (a = container->arrays; a; a = a->next) {
 			if (strcmp(mdstat->devnm, a->info.sys_name) == 0) {
-				if (a->container && a->to_remove == 0)
+				if (a->container && a->to_remove == 0) {
+					pthread_mutex_lock(&array_lock);
 					manage_member(mdstat, a);
+					pthread_mutex_unlock(&array_lock);
+				}
 				break;
 			}
 		}
@@ -1010,11 +1199,12 @@ void do_manager(struct supertype *container)
 	struct mdstat_ent *mdstat;
 	sigset_t set;
 
-	sigprocmask(SIG_UNBLOCK, NULL, &set);
-	sigdelset(&set, SIGUSR1);
-	sigdelset(&set, SIGTERM);
+	Name = "manager";
 
 	do {
+		sigprocmask(SIG_UNBLOCK, NULL, &set);
+		sigdelset(&set, SIGUSR1);
+		sigdelset(&set, SIGTERM);
 
 		if (exit_now)
 			exit(0);

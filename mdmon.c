@@ -68,10 +68,11 @@
 #include	"mdmon.h"
 #include	"mdvote.h"
 
-char Name[256] = "mdmon";
+__thread const char *Name = "mdmon";
 
 struct active_array *discard_this;
 struct active_array *pending_discard;
+pthread_mutex_t      array_lock;
 
 int mon_tid, mgr_tid;
 
@@ -395,7 +396,6 @@ int main(int argc, char *argv[])
 		exit(1);
 	}
 
-	snprintf((char *)Name, sizeof Name, "mdmon-%s", container_name);
 	return mdmon(devnm, dofork && do_fork(), takeover);
 }
 
@@ -456,6 +456,7 @@ static int mdmon(char *devnm, int must_fork, int takeover)
 	strcpy(container->devnm, devnm);
 	container->arrays = NULL;
 	container->sock = -1;
+	pthread_mutex_init(&array_lock, NULL);
 
 	mdi = sysfs_read(mdfd, container->devnm, GET_VERSION|GET_LEVEL|GET_DEVS);
 
